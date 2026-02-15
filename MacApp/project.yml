@@ -1,0 +1,99 @@
+name: SevenZipMac
+options:
+  bundleIdPrefix: com.7zip
+  deploymentTarget:
+    macOS: "13.0"
+  xcodeVersion: "15.0"
+  minimumXcodeGenVersion: "2.35"
+  generateEmptyDirectories: true
+  groupOrdering:
+    - order: [SevenZipMac, FinderExtension, Scripts]
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    ARCHS: arm64
+    VALID_ARCHS: arm64 x86_64
+    ONLY_ACTIVE_ARCH: false
+
+targets:
+
+  # ── Main Application ──────────────────────────────────────────────
+  SevenZipMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: SevenZipMac
+        excludes:
+          - "Resources/Info.plist"
+    resources:
+      - path: SevenZipMac/Resources/Assets.xcassets
+      - path: SevenZipMac/Resources/7zz
+        optional: true
+        buildPhase: resources
+    info:
+      path: SevenZipMac/Resources/Info.plist
+    entitlements:
+      path: SevenZipMac/Entitlements/SevenZipMac.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.7zip.SevenZipMac
+        PRODUCT_NAME: "7-Zip"
+        INFOPLIST_FILE: SevenZipMac/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: SevenZipMac/Entitlements/SevenZipMac.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        COMBINE_HIDPI_IMAGES: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: YES
+    dependencies:
+      - target: FinderExtension
+        embed: true
+        codeSign: true
+        copy:
+          destination: plugins
+    preBuildScripts:
+      - name: "Build 7zz Binary"
+        script: |
+          if [ ! -f "${SRCROOT}/SevenZipMac/Resources/7zz" ]; then
+            echo "warning: 7zz binary not found. Run Scripts/build_7zz.sh first."
+          fi
+        basedOnDependencyAnalysis: false
+
+  # ── Finder Extension ──────────────────────────────────────────────
+  FinderExtension:
+    type: finder-sync-extension
+    platform: macOS
+    sources:
+      - path: FinderExtension
+        excludes:
+          - "Info.plist"
+    info:
+      path: FinderExtension/Info.plist
+    entitlements:
+      path: FinderExtension/FinderExtension.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.7zip.SevenZipMac.FinderExtension
+        PRODUCT_NAME: "7-Zip Finder Extension"
+        INFOPLIST_FILE: FinderExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FinderExtension/FinderExtension.entitlements
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
+        SKIP_INSTALL: YES
+
+schemes:
+  SevenZipMac:
+    build:
+      targets:
+        SevenZipMac: all
+        FinderExtension: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
