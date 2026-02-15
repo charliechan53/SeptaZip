@@ -100,8 +100,16 @@ archive: ## Create release archive
 # ── DMG Installer ───────────────────────────────────────────────
 
 .PHONY: dmg
-dmg: archive ## Create DMG installer for distribution
+dmg: build-release ## Create DMG installer for distribution
 	@echo "=== Creating DMG ==="
+	@APP_PATH=$$(xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
+		-configuration Release -showBuildSettings 2>/dev/null \
+		| grep " BUILT_PRODUCTS_DIR" | head -1 | awk '{print $$NF}') ; \
+	./Scripts/create_dmg.sh "$$APP_PATH/7-Zip.app" $(BUILD_DIR)
+
+.PHONY: dmg-from-archive
+dmg-from-archive: archive ## Create DMG from xcarchive (requires full Xcode)
+	@echo "=== Creating DMG from archive ==="
 	./Scripts/create_dmg.sh \
 		"$(BUILD_DIR)/archive/SevenZipMac.xcarchive/Products/Applications/7-Zip.app" \
 		$(BUILD_DIR)
