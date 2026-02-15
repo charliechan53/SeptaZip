@@ -25,7 +25,8 @@ mkdir -p "$OUTPUT_DIR"
 
 build_arch() {
     local arch="$1"
-    local build_dir="$BUNDLES_DIR/b/mac_${arch}"
+    local build_subdir="b/mac_${arch}"
+    local build_dir="$BUNDLES_DIR/$build_subdir"
     local makefile_var
 
     if [ "$arch" = "arm64" ]; then
@@ -35,9 +36,6 @@ build_arch() {
     fi
 
     echo "--- Building for $arch ---"
-
-    # Clean previous build
-    rm -rf "$build_dir"
 
     # Build using the existing makefile system
     cd "$BUNDLES_DIR"
@@ -51,14 +49,15 @@ build_arch() {
         USE_ASM= \
         CC="clang -arch $arch" \
         CXX="clang++ -arch $arch" \
-        O="b/mac_${arch}" \
+        O="$build_subdir" \
         2>&1
 
     if [ -f "$build_dir/7zz" ]; then
-        echo "Successfully built 7zz for $arch"
+        echo "Successfully built 7zz for $arch at $build_dir/7zz"
         return 0
     else
-        echo "ERROR: Build failed for $arch"
+        echo "ERROR: Build failed for $arch (expected at $build_dir/7zz)"
+        ls -la "$build_dir/" 2>/dev/null || echo "Build directory does not exist"
         return 1
     fi
 }
@@ -66,16 +65,19 @@ build_arch() {
 case "$ARCH" in
     arm64)
         build_arch "arm64"
+        mkdir -p "$OUTPUT_DIR"
         cp "$BUNDLES_DIR/b/mac_arm64/7zz" "$OUTPUT_DIR/7zz"
         ;;
     x64)
         build_arch "x86_64"
+        mkdir -p "$OUTPUT_DIR"
         cp "$BUNDLES_DIR/b/mac_x86_64/7zz" "$OUTPUT_DIR/7zz"
         ;;
     universal)
         build_arch "arm64"
         build_arch "x86_64"
         echo "--- Creating universal binary ---"
+        mkdir -p "$OUTPUT_DIR"
         lipo -create \
             "$BUNDLES_DIR/b/mac_arm64/7zz" \
             "$BUNDLES_DIR/b/mac_x86_64/7zz" \

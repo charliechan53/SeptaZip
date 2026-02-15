@@ -62,7 +62,7 @@ targets:
 
   # ── Finder Extension ──────────────────────────────────────────────
   FinderExtension:
-    type: finder-sync-extension
+    type: app-extension
     platform: macOS
     sources:
       - path: FinderExtension
