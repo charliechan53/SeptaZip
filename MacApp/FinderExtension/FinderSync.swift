@@ -212,17 +212,17 @@ class FinderSync: FIFinderSync {
     }
 
     private func find7zz() -> String? {
-        // Look in the main app bundle
-        let appBundlePaths = [
-            Bundle.main.bundlePath
-                .replacingOccurrences(of: "/Contents/PlugIns/FinderExtension.appex",
-                                      with: "/Contents/Resources/7zz"),
-        ]
+        // In the extension, walk back up from:
+        // App.app/Contents/PlugIns/Extension.appex -> App.app/Contents/Resources/7zz
+        let bundleURL = Bundle.main.bundleURL
+        let appResourcesURL = bundleURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources", isDirectory: true)
+            .appendingPathComponent("7zz", isDirectory: false)
 
-        for path in appBundlePaths {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
-            }
+        if FileManager.default.isExecutableFile(atPath: appResourcesURL.path) {
+            return appResourcesURL.path
         }
 
         #if DEBUG

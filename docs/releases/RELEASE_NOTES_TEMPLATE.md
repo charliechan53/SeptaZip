@@ -1,4 +1,4 @@
-# SeptaZip v1.0.0
+# SeptaZip v1.1.0
 
 Native macOS archive manager powered by the official 7-Zip engine.
 
@@ -7,13 +7,14 @@ Native macOS archive manager powered by the official 7-Zip engine.
 - Browse archive contents in a native macOS app
 - Compress and extract common archive formats
 - Finder right-click integration for extract, test, and compress actions
+- Finder extension registration fixed so the context menu can be enabled reliably
 - Modernized app icon and refreshed macOS UI
 - Bundled official 7-Zip `7zz` engine
 
 ## Download
 
-- Download `SeptaZip-1.0.dmg`
-- Verify it with `SeptaZip-1.0.dmg.sha256`
+- Download `SeptaZip-1.1.0.dmg`
+- Verify it with `SeptaZip-1.1.0.dmg.sha256`
 
 ## Install
 

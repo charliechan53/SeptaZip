@@ -51,7 +51,8 @@ echo ""
 mkdir -p "$OUTPUT_DIR"
 
 # Read version from the app's Info.plist
-VERSION=$(defaults read "$APP_PATH/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "1.0")
+INFO_PLIST="$APP_PATH/Contents/Info.plist"
+VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST" 2>/dev/null || echo "1.0")
 DMG_FILENAME="${DMG_NAME}-${VERSION}.dmg"
 DMG_PATH="$OUTPUT_DIR/$DMG_FILENAME"
 

@@ -17,10 +17,8 @@ Use this flow when publishing SeptaZip outside the Mac App Store.
 ```bash
 cd MacApp
 make dmg
-shasum -a 256 build/SeptaZip-1.0.dmg > build/SeptaZip-1.0.dmg.sha256
+shasum -a 256 build/SeptaZip-<version>.dmg > build/SeptaZip-<version>.dmg.sha256
 ```
-
-Adjust the filename if the app version changes.
 
 ## Smoke test
 
@@ -37,28 +35,28 @@ Check:
 ```bash
 git checkout main
 git pull --ff-only
-git tag -a v1.0.0 -m "SeptaZip v1.0.0"
+git tag -a v<version> -m "SeptaZip v<version>"
 git push origin main
-git push origin v1.0.0
+git push origin v<version>
 ```
 
 ## Create the GitHub release
 
 ```bash
-gh release create v1.0.0 \
-  MacApp/build/SeptaZip-1.0.dmg \
-  MacApp/build/SeptaZip-1.0.dmg.sha256 \
-  --title "SeptaZip v1.0.0" \
+gh release create v<version> \
+  MacApp/build/SeptaZip-<version>.dmg \
+  MacApp/build/SeptaZip-<version>.dmg.sha256 \
+  --title "SeptaZip v<version>" \
   --notes-file docs/releases/RELEASE_NOTES_TEMPLATE.md
 ```
 
 If you want to edit the notes before publishing, create the release as a draft:
 
 ```bash
-gh release create v1.0.0 \
-  MacApp/build/SeptaZip-1.0.dmg \
-  MacApp/build/SeptaZip-1.0.dmg.sha256 \
-  --title "SeptaZip v1.0.0" \
+gh release create v<version> \
+  MacApp/build/SeptaZip-<version>.dmg \
+  MacApp/build/SeptaZip-<version>.dmg.sha256 \
+  --title "SeptaZip v<version>" \
   --notes-file docs/releases/RELEASE_NOTES_TEMPLATE.md \
   --draft
 ```
