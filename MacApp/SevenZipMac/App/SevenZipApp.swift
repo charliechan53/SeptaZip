@@ -14,6 +14,7 @@ struct SevenZipApp: App {
                 .environmentObject(actionRouter)
                 .frame(minWidth: 920, minHeight: 560)
         }
+        .defaultSize(width: 1120, height: 720)
         .commands {
             // File menu commands
             CommandGroup(after: .newItem) {

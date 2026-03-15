@@ -263,72 +263,14 @@ struct MainWindow: View {
     // MARK: - Welcome View
 
     private var welcomeView: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                VStack(spacing: 18) {
-                    Image(nsImage: NSApplication.shared.applicationIconImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 92, height: 92)
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
-
-                    VStack(spacing: 8) {
-                        Text("SeptaZip")
-                            .font(.system(size: 34, weight: .semibold, design: .rounded))
-
-                        Text("Browse, extract, test, and compress archives with the official 7-Zip engine on macOS.")
-                            .font(.title3)
-                            .multilineTextAlignment(.center)
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: 620)
-                    }
-                }
-
-                HStack(spacing: 14) {
-                    Button("Open Archive") {
-                        showOpenPanel()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-
-                    Button("Compress Files") {
-                        pendingCompressionFiles = []
-                        showCompressSheet = true
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                }
-
-                HStack(spacing: 14) {
-                    welcomeFeatureCard(
-                        title: "Archive Browser",
-                        detail: "Open ZIP, 7z, RAR, TAR, DMG, ISO, and more.",
-                        systemImage: "square.stack.3d.up.fill"
-                    )
-                    welcomeFeatureCard(
-                        title: "Finder Actions",
-                        detail: "Right-click integration for extract, compress, and test.",
-                        systemImage: "cursorarrow.click.2"
-                    )
-                    welcomeFeatureCard(
-                        title: "Official Engine",
-                        detail: archiveManager.engineDetails?.buildSummary ?? "Built on bundled 7-Zip.",
-                        systemImage: "shippingbox.fill"
-                    )
-                }
-
-                VStack(spacing: 10) {
-                    Text("Supported formats")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.secondary)
-
-                    Text("7z, ZIP, RAR, TAR, GZ, BZ2, XZ, ZSTD, ISO, DMG, WIM, and 40+ more")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+        GeometryReader { proxy in
+            ViewThatFits(in: .vertical) {
+                welcomeContent(compact: false)
+                welcomeContent(compact: true)
             }
-            .padding(32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .padding(.horizontal, proxy.size.width > 1050 ? 36 : 24)
+            .padding(.vertical, proxy.size.height > 660 ? 32 : 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
@@ -341,6 +283,108 @@ struct MainWindow: View {
                 endPoint: .bottomTrailing
             )
         )
+    }
+
+    @ViewBuilder
+    private func welcomeContent(compact: Bool) -> some View {
+        VStack(spacing: compact ? 14 : 22) {
+            VStack(spacing: compact ? 12 : 18) {
+                Image(nsImage: NSApplication.shared.applicationIconImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: compact ? 60 : 92, height: compact ? 60 : 92)
+                    .clipShape(RoundedRectangle(cornerRadius: compact ? 16 : 22, style: .continuous))
+                    .shadow(color: .black.opacity(0.12), radius: compact ? 10 : 16, y: compact ? 4 : 8)
+
+                VStack(spacing: compact ? 6 : 8) {
+                    Text("SeptaZip")
+                        .font(.system(size: compact ? 28 : 34, weight: .semibold, design: .rounded))
+
+                    Text("Browse, extract, test, and compress archives with the official 7-Zip engine on macOS.")
+                        .font(compact ? .body : .title3)
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: compact ? 560 : 620)
+                }
+            }
+
+            HStack(spacing: 14) {
+                Button("Open Archive") {
+                    showOpenPanel()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(compact ? .regular : .large)
+
+                Button("Compress Files") {
+                    pendingCompressionFiles = []
+                    showCompressSheet = true
+                }
+                .buttonStyle(.bordered)
+                .controlSize(compact ? .regular : .large)
+            }
+
+            if compact {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 12),
+                        GridItem(.flexible(), spacing: 12)
+                    ],
+                    spacing: 12
+                ) {
+                    welcomeFeatureCard(
+                        title: "Archive Browser",
+                        detail: "Open ZIP, 7z, RAR, TAR, DMG, ISO, and more.",
+                        systemImage: "square.stack.3d.up.fill",
+                        compact: true
+                    )
+                    welcomeFeatureCard(
+                        title: "Finder Actions",
+                        detail: "Right-click integration for extract, compress, and test.",
+                        systemImage: "cursorarrow.click.2",
+                        compact: true
+                    )
+                    welcomeFeatureCard(
+                        title: "Official Engine",
+                        detail: archiveManager.engineDetails?.buildSummary ?? "Built on bundled 7-Zip.",
+                        systemImage: "shippingbox.fill",
+                        compact: true
+                    )
+                }
+            } else {
+                HStack(spacing: 14) {
+                    welcomeFeatureCard(
+                        title: "Archive Browser",
+                        detail: "Open ZIP, 7z, RAR, TAR, DMG, ISO, and more.",
+                        systemImage: "square.stack.3d.up.fill",
+                        compact: false
+                    )
+                    welcomeFeatureCard(
+                        title: "Finder Actions",
+                        detail: "Right-click integration for extract, compress, and test.",
+                        systemImage: "cursorarrow.click.2",
+                        compact: false
+                    )
+                    welcomeFeatureCard(
+                        title: "Official Engine",
+                        detail: archiveManager.engineDetails?.buildSummary ?? "Built on bundled 7-Zip.",
+                        systemImage: "shippingbox.fill",
+                        compact: false
+                    )
+                }
+            }
+
+            VStack(spacing: compact ? 6 : 10) {
+                Text("Supported formats")
+                    .font((compact ? Font.caption : Font.caption.weight(.semibold)))
+                    .foregroundColor(.secondary)
+
+                Text("7z, ZIP, RAR, TAR, GZ, BZ2, XZ, ZSTD, ISO, DMG, WIM, and 40+ more")
+                    .font(compact ? .caption2 : .caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
     // MARK: - Archive Browser
@@ -496,22 +540,22 @@ struct MainWindow: View {
         .padding(20)
     }
 
-    private func welcomeFeatureCard(title: String, detail: String, systemImage: String) -> some View {
+    private func welcomeFeatureCard(title: String, detail: String, systemImage: String, compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Image(systemName: systemImage)
-                .font(.title3)
+                .font(compact ? .headline : .title3)
                 .foregroundColor(.accentColor)
 
             Text(title)
-                .font(.headline)
+                .font(compact ? .subheadline.weight(.semibold) : .headline)
 
             Text(detail)
-                .font(.subheadline)
+                .font(compact ? .caption : .subheadline)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, minHeight: 138, alignment: .topLeading)
+        .padding(compact ? 14 : 18)
+        .frame(maxWidth: .infinity, minHeight: compact ? 88 : 138, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(.regularMaterial)
