@@ -18,6 +18,21 @@ struct CompressView: View {
     @State private var showSuccess = false
     @State private var isDraggingOver = false
 
+    init(initialFiles: [URL] = []) {
+        let defaults = UserDefaults.standard
+        let format = ArchiveFormat(
+            rawValue: defaults.string(forKey: "defaultFormat") ?? ArchiveFormat.sevenZ.rawValue
+        ) ?? .sevenZ
+        let level = CompressionLevel(
+            rawValue: defaults.object(forKey: "defaultLevel") as? Int ?? CompressionLevel.normal.rawValue
+        ) ?? .normal
+
+        _selectedFiles = State(initialValue: Self.uniqueURLs(initialFiles))
+        _outputPath = State(initialValue: "")
+        _format = State(initialValue: format)
+        _level = State(initialValue: level)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -174,6 +189,9 @@ struct CompressView: View {
         } message: {
             Text("Archive has been created successfully.")
         }
+        .onAppear {
+            updateOutputPath()
+        }
     }
 
     // MARK: - Drop Zone
@@ -238,7 +256,7 @@ struct CompressView: View {
         panel.canChooseFiles = true
 
         if panel.runModal() == .OK {
-            selectedFiles.append(contentsOf: panel.urls)
+            appendSelectedFiles(panel.urls)
             updateOutputPath()
         }
     }
@@ -250,7 +268,7 @@ struct CompressView: View {
         panel.canChooseFiles = false
 
         if panel.runModal() == .OK {
-            selectedFiles.append(contentsOf: panel.urls)
+            appendSelectedFiles(panel.urls)
             updateOutputPath()
         }
     }
@@ -301,7 +319,7 @@ struct CompressView: View {
                 if let data = item as? Data,
                    let url = URL(dataRepresentation: data, relativeTo: nil) {
                     DispatchQueue.main.async {
-                        selectedFiles.append(url)
+                        appendSelectedFiles([url])
                         updateOutputPath()
                     }
                 }
@@ -331,6 +349,18 @@ struct CompressView: View {
                 errorMessage = error.localizedDescription
                 showError = true
             }
+        }
+    }
+
+    private func appendSelectedFiles(_ urls: [URL]) {
+        let merged = selectedFiles + urls
+        selectedFiles = Self.uniqueURLs(merged)
+    }
+
+    private static func uniqueURLs(_ urls: [URL]) -> [URL] {
+        var seen = Set<String>()
+        return urls.filter { url in
+            seen.insert(url.path).inserted
         }
     }
 }

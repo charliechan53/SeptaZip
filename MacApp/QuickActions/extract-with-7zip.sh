@@ -12,11 +12,17 @@
 # Find 7zz binary
 SEVENZZ=""
 CANDIDATES=(
-    "/Applications/7-Zip.app/Contents/Resources/7zz"
-    "/usr/local/bin/7zz"
-    "/opt/homebrew/bin/7zz"
-    "$HOME/.local/bin/7zz"
+    "/Applications/SeptaZip.app/Contents/Resources/7zz"
 )
+
+if [ "${SEPTAZIP_ALLOW_EXTERNAL_7ZZ:-0}" = "1" ]; then
+    CANDIDATES+=(
+        "/Applications/7-Zip.app/Contents/Resources/7zz"
+        "/usr/local/bin/7zz"
+        "/opt/homebrew/bin/7zz"
+        "$HOME/.local/bin/7zz"
+    )
+fi
 
 for candidate in "${CANDIDATES[@]}"; do
     if [ -x "$candidate" ]; then
@@ -79,7 +85,7 @@ for ARCHIVE in "${FILES[@]}"; do
 
     "$SEVENZZ" x -o"$DEST" -aoa "$ARCHIVE" 2>&1
 
-    if [ $? -eq 0 ]; then
+    if [ $? -le 1 ]; then
         SUCCESS=$((SUCCESS + 1))
     else
         ERRORS=$((ERRORS + 1))

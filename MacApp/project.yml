@@ -13,7 +13,7 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     MACOSX_DEPLOYMENT_TARGET: "13.0"
-    ARCHS: arm64
+    ARCHS: "$(ARCHS_STANDARD)"
     VALID_ARCHS: arm64 x86_64
     ONLY_ACTIVE_ARCH: false
     CODE_SIGN_IDENTITY: "-"  # Ad-hoc signing (no Apple Developer account needed)
@@ -36,6 +36,27 @@ targets:
         buildPhase: resources
     info:
       path: SevenZipMac/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: SeptaZip
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Archive
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            CFBundleTypeExtensions:
+              - 7z
+              - zip
+              - rar
+              - tar
+              - gz
+              - bz2
+              - xz
+              - zst
+              - iso
+              - dmg
+              - wim
+              - cab
+              - rpm
+              - deb
     entitlements:
       path: SevenZipMac/Entitlements/SevenZipMac.entitlements
     settings:
@@ -56,11 +77,15 @@ targets:
         copy:
           destination: plugins
     preBuildScripts:
-      - name: "Build 7zz Binary"
+      - name: "Bundle 7zz Binary"
         script: |
           if [ ! -f "${SRCROOT}/SevenZipMac/Resources/7zz" ]; then
             echo "warning: 7zz binary not found. Run Scripts/build_7zz.sh first."
+            exit 0
           fi
+          mkdir -p "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          cp "${SRCROOT}/SevenZipMac/Resources/7zz" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/7zz"
+          chmod +x "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/7zz"
         basedOnDependencyAnalysis: false
 
   # ── Finder Extension ──────────────────────────────────────────────
@@ -73,6 +98,11 @@ targets:
           - "Info.plist"
     info:
       path: FinderExtension/Info.plist
+      properties:
+        CFBundleDisplayName: SeptaZip Finder Extension
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.FinderSync
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).FinderSync"
     entitlements:
       path: FinderExtension/FinderExtension.entitlements
     settings:

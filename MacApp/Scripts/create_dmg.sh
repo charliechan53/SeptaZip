@@ -21,6 +21,7 @@ VOLUME_NAME="SeptaZip"
 if [ -z "$APP_PATH" ]; then
     # Try common locations
     for candidate in \
+        "$MACAPP_DIR/DerivedData/Build/Products/Release/$APP_NAME.app" \
         "$MACAPP_DIR/build/Build/Products/Release/$APP_NAME.app" \
         "$MACAPP_DIR/build/archive/$APP_NAME.xcarchive/Products/Applications/$APP_NAME.app" \
         "$MACAPP_DIR/build/Release/$APP_NAME.app"; do

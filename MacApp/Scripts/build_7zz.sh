@@ -10,7 +10,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-BUNDLES_DIR="$ROOT_DIR/CPP/7zip/Bundles/Alone2"
+SOURCE_ROOT="$ROOT_DIR/source_code/7zip"
+BUNDLES_DIR="$SOURCE_ROOT/CPP/7zip/Bundles/Alone2"
 
 ARCH="${1:-arm64}"
 OUTPUT_DIR="${2:-$SCRIPT_DIR/../build}"
@@ -21,9 +22,15 @@ OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 
 echo "=== Building 7zz for macOS ==="
 echo "Architecture: $ARCH"
-echo "Source root:  $ROOT_DIR"
+echo "Source root:  $SOURCE_ROOT"
 echo "Output dir:   $OUTPUT_DIR"
 echo ""
+
+if [ ! -d "$BUNDLES_DIR" ]; then
+    echo "ERROR: 7-Zip source tree not found at: $SOURCE_ROOT"
+    echo "Expected build path: $BUNDLES_DIR"
+    exit 1
+fi
 
 build_arch() {
     local arch="$1"
@@ -68,6 +75,10 @@ case "$ARCH" in
     arm64)
         build_arch "arm64"
         cp "$BUNDLES_DIR/b/mac_arm64/7zz" "$OUTPUT_DIR/7zz"
+        ;;
+    x86_64)
+        build_arch "x86_64"
+        cp "$BUNDLES_DIR/b/mac_x86_64/7zz" "$OUTPUT_DIR/7zz"
         ;;
     x64)
         build_arch "x86_64"

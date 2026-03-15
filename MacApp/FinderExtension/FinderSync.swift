@@ -1,5 +1,6 @@
 import Cocoa
 import FinderSync
+import UserNotifications
 
 class FinderSync: FIFinderSync {
 
@@ -7,6 +8,8 @@ class FinderSync: FIFinderSync {
         super.init()
         // Monitor all directories - the extension will show context menus everywhere
         FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: "/")]
+        // Request notification permission for operation feedback
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     // MARK: - Context Menu for selected items
@@ -222,7 +225,16 @@ class FinderSync: FIFinderSync {
             }
         }
 
-        // Fallback paths
+        #if DEBUG
+        let allowExternalFallbacks = true
+        #else
+        let allowExternalFallbacks = ProcessInfo.processInfo.environment["SEPTAZIP_ALLOW_EXTERNAL_7ZZ"] == "1"
+        #endif
+
+        guard allowExternalFallbacks else {
+            return nil
+        }
+
         let fallbacks = [
             "/usr/local/bin/7zz",
             "/opt/homebrew/bin/7zz",
@@ -245,28 +257,44 @@ class FinderSync: FIFinderSync {
 
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
-            let pipe = Pipe()
             let errorPipe = Pipe()
+            let errorHandle = errorPipe.fileHandleForReading
+            let lock = NSLock()
+            var errorData = Data()
 
             process.executableURL = URL(fileURLWithPath: binary)
             process.arguments = args
-            process.standardOutput = pipe
+            process.standardOutput = FileHandle.nullDevice
             process.standardError = errorPipe
+
+            errorHandle.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { return }
+                lock.lock()
+                errorData.append(chunk)
+                lock.unlock()
+            }
 
             do {
                 try process.run()
                 process.waitUntilExit()
+                errorHandle.readabilityHandler = nil
 
-                if process.terminationStatus == 0 {
+                let trailingError = errorHandle.readDataToEndOfFile()
+                lock.lock()
+                errorData.append(trailingError)
+                let errorMsg = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+                lock.unlock()
+
+                if process.terminationStatus <= 1 {
                     self.showNotification(title: "7-Zip",
                                         message: "Operation completed successfully.")
                 } else {
-                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                    let errorMsg = String(data: errorData, encoding: .utf8) ?? "Unknown error"
                     self.showNotification(title: "7-Zip Error",
                                         message: errorMsg.prefix(200).description)
                 }
             } catch {
+                errorHandle.readabilityHandler = nil
                 self.showNotification(title: "7-Zip Error",
                                     message: error.localizedDescription)
             }
@@ -274,11 +302,11 @@ class FinderSync: FIFinderSync {
     }
 
     private func openMainApp(action: String, files: [String]) {
-        let appBundleId = "com.7zip.SevenZipMac"
+        let appBundleId = "com.septazip.SeptaZip"
         let workspace = NSWorkspace.shared
 
         // Pass files via pasteboard with a custom type
-        let pb = NSPasteboard(name: NSPasteboard.Name("com.7zip.action"))
+        let pb = NSPasteboard(name: NSPasteboard.Name("com.septazip.action"))
         pb.clearContents()
         let data = try? JSONEncoder().encode(["action": action, "files": files.joined(separator: "\n")])
         if let data = data {
@@ -301,10 +329,14 @@ class FinderSync: FIFinderSync {
     }
 
     private func showNotification(title: String, message: String) {
-        let notification = NSUserNotification()
-        notification.title = title
-        notification.informativeText = message
-        notification.soundName = nil
-        NSUserNotificationCenter.default.deliver(notification)
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = message
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
     }
 }

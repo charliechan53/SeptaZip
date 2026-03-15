@@ -6,8 +6,10 @@ struct ExtractView: View {
 
     let archivePath: String
 
+    @AppStorage("openAfterExtract") private var openAfterExtract = true
+    @AppStorage("deleteAfterExtract") private var deleteAfterExtract = false
     @State private var destinationPath = ""
-    @State private var extractMode: ExtractMode = .toSubfolder
+    @State private var extractMode: ExtractMode
     @State private var overwriteMode: OverwriteMode = .overwrite
     @State private var password = ""
     @State private var isExtracting = false
@@ -24,6 +26,12 @@ struct ExtractView: View {
     enum OverwriteMode {
         case overwrite
         case skip
+    }
+
+    init(archivePath: String) {
+        self.archivePath = archivePath
+        let extractToSubfolder = UserDefaults.standard.object(forKey: "extractToSubfolder") as? Bool ?? true
+        _extractMode = State(initialValue: extractToSubfolder ? .toSubfolder : .here)
     }
 
     var body: some View {
@@ -216,6 +224,15 @@ struct ExtractView: View {
                     password: password.isEmpty ? nil : password,
                     overwrite: overwriteMode == .overwrite
                 )
+                if deleteAfterExtract {
+                    try? FileManager.default.trashItem(
+                        at: URL(fileURLWithPath: archivePath),
+                        resultingItemURL: nil
+                    )
+                }
+                if openAfterExtract {
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: destinationPath)
+                }
                 isExtracting = false
                 showSuccess = true
             } catch {

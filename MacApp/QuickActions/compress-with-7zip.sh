@@ -12,11 +12,17 @@
 # Find 7zz binary
 SEVENZZ=""
 CANDIDATES=(
-    "/Applications/7-Zip.app/Contents/Resources/7zz"
-    "/usr/local/bin/7zz"
-    "/opt/homebrew/bin/7zz"
-    "$HOME/.local/bin/7zz"
+    "/Applications/SeptaZip.app/Contents/Resources/7zz"
 )
+
+if [ "${SEPTAZIP_ALLOW_EXTERNAL_7ZZ:-0}" = "1" ]; then
+    CANDIDATES+=(
+        "/Applications/7-Zip.app/Contents/Resources/7zz"
+        "/usr/local/bin/7zz"
+        "/opt/homebrew/bin/7zz"
+        "$HOME/.local/bin/7zz"
+    )
+fi
 
 for candidate in "${CANDIDATES[@]}"; do
     if [ -x "$candidate" ]; then
@@ -101,7 +107,7 @@ done
 # Compress
 "$SEVENZZ" a -t"$TYPE_FLAG" -mx=5 "$OUTPUT" "${FILES[@]}" 2>&1
 
-if [ $? -eq 0 ]; then
+if [ $? -le 1 ]; then
     osascript -e "display notification \"Archive created: $(basename "$OUTPUT")\" with title \"7-Zip\" subtitle \"Compression complete\""
 else
     osascript -e 'display dialog "Compression failed. Check the files and try again." with title "7-Zip Error" buttons {"OK"} default button "OK" with icon caution'

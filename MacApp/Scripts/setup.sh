@@ -46,10 +46,15 @@ fi
 ARCH=$(uname -m)
 echo "[OK] Architecture: $ARCH"
 
+BUILD_ARCH="$ARCH"
+if [ "$BUILD_ARCH" = "x86_64" ]; then
+    BUILD_ARCH="x64"
+fi
+
 # Build 7zz binary
 echo ""
 echo "--- Building 7zz binary ---"
-"$SCRIPT_DIR/build_7zz.sh" arm64 "$APP_DIR/build"
+"$SCRIPT_DIR/build_7zz.sh" "$BUILD_ARCH" "$APP_DIR/build"
 
 # Copy binary into app resources
 mkdir -p "$APP_DIR/SevenZipMac/Resources"
@@ -69,9 +74,9 @@ echo ""
 echo "=== Setup complete ==="
 echo ""
 echo "Next steps:"
-echo "  1. Open MacApp/SevenZipMac.xcodeproj in Xcode"
-echo "     (or run: xcodegen generate && open SevenZipMac.xcodeproj)"
-echo "  2. Select 'SevenZipMac' scheme and build (Cmd+B)"
+echo "  1. Open MacApp/SeptaZip.xcodeproj in Xcode"
+echo "     (or run: xcodegen generate && open SeptaZip.xcodeproj)"
+echo "  2. Select 'SeptaZip' scheme and build (Cmd+B)"
 echo "  3. Run the app (Cmd+R)"
 echo ""
 echo "To install Finder extension:"

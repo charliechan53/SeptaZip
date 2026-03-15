@@ -19,8 +19,13 @@ SHELL := /bin/bash
 SCHEME := SeptaZip
 PROJECT := SeptaZip.xcodeproj
 BUILD_DIR := build
-ARCH := arm64
+HOST_ARCH := $(shell uname -m)
+ARCH ?= $(if $(filter x86_64,$(HOST_ARCH)),x64,arm64)
+XCODE_ARCH := $(if $(filter x64,$(ARCH)),x86_64,$(ARCH))
+DERIVED_DATA := DerivedData
 APP_NAME := SeptaZip
+DEBUG_APP_PATH := $(DERIVED_DATA)/Build/Products/Debug/$(APP_NAME).app
+RELEASE_APP_PATH := $(DERIVED_DATA)/Build/Products/Release/$(APP_NAME).app
 
 # ── Setup ────────────────────────────────────────────────────────
 
@@ -61,7 +66,8 @@ build: ## Build the app using xcodebuild
 		-project $(PROJECT) \
 		-scheme $(SCHEME) \
 		-configuration Debug \
-		-arch $(ARCH) \
+		-arch $(XCODE_ARCH) \
+		-derivedDataPath $(DERIVED_DATA) \
 		ONLY_ACTIVE_ARCH=YES \
 		| tail -20
 
@@ -72,17 +78,15 @@ build-release: ## Build release version
 		-project $(PROJECT) \
 		-scheme $(SCHEME) \
 		-configuration Release \
-		-arch $(ARCH) \
+		-arch $(XCODE_ARCH) \
+		-derivedDataPath $(DERIVED_DATA) \
 		| tail -20
 
 # ── Run ──────────────────────────────────────────────────────────
 
 .PHONY: run
 run: build ## Build and run the app
-	@APP_PATH=$$(xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
-		-configuration Debug -showBuildSettings 2>/dev/null \
-		| grep " BUILT_PRODUCTS_DIR" | head -1 | awk '{print $$NF}') ; \
-	open "$$APP_PATH/$(APP_NAME).app"
+	open "$(DEBUG_APP_PATH)"
 
 # ── Archive ──────────────────────────────────────────────────────
 
@@ -94,6 +98,7 @@ archive: ## Create release archive
 		-project $(PROJECT) \
 		-scheme $(SCHEME) \
 		-configuration Release \
+		-derivedDataPath $(DERIVED_DATA) \
 		-archivePath $(BUILD_DIR)/archive/$(APP_NAME).xcarchive \
 		-arch $(ARCH)
 	@echo "Archive created at $(BUILD_DIR)/archive/$(APP_NAME).xcarchive"
@@ -103,10 +108,7 @@ archive: ## Create release archive
 .PHONY: dmg
 dmg: build-release ## Create DMG installer for distribution
 	@echo "=== Creating DMG ==="
-	@APP_PATH=$$(xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
-		-configuration Release -showBuildSettings 2>/dev/null \
-		| grep " BUILT_PRODUCTS_DIR" | head -1 | awk '{print $$NF}') ; \
-	./Scripts/create_dmg.sh "$$APP_PATH/$(APP_NAME).app" $(BUILD_DIR)
+	./Scripts/create_dmg.sh "$(RELEASE_APP_PATH)" $(BUILD_DIR)
 
 .PHONY: dmg-from-archive
 dmg-from-archive: archive ## Create DMG from xcarchive (requires full Xcode)

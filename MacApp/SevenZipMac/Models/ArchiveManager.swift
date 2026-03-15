@@ -36,6 +36,82 @@ struct ArchiveProgress {
     let bytesTotal: UInt64
 }
 
+/// Runtime details for the bundled 7-Zip engine.
+struct EngineDetails: Equatable {
+    let versionNumber: String
+    let architecture: String?
+    let buildDate: String?
+    let copyright: String?
+    let runtimeLine: String
+    let platformLine: String?
+    let binaryPath: String
+
+    var displayVersion: String {
+        if let architecture {
+            return "7-Zip \(versionNumber) (\(architecture))"
+        }
+        return "7-Zip \(versionNumber)"
+    }
+
+    var buildSummary: String {
+        if let buildDate {
+            return "\(displayVersion) · \(buildDate)"
+        }
+        return displayVersion
+    }
+
+    var diagnosticsText: String {
+        [
+            "Engine: \(displayVersion)",
+            buildDate.map { "Build date: \($0)" },
+            copyright.map { "Copyright: \($0)" },
+            platformLine.map { "Platform: \($0)" },
+            "Binary: \(binaryPath)",
+            "Upstream: https://github.com/ip7z/7zip"
+        ]
+        .compactMap { $0 }
+        .joined(separator: "\n")
+    }
+
+    static func parse(from output: String, binaryPath: String) -> EngineDetails {
+        let lines = output
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let runtimeLine = lines.first ?? "7-Zip"
+        let platformLine = lines.dropFirst().first
+        let parts = runtimeLine.components(separatedBy: " : ")
+        let runtimeDescriptor = parts.first ?? runtimeLine
+        let versionDescriptor = runtimeDescriptor.replacingOccurrences(of: "7-Zip (z) ", with: "")
+
+        let versionNumber: String
+        let architecture: String?
+
+        if let openParen = versionDescriptor.firstIndex(of: "("),
+           let closeParen = versionDescriptor.lastIndex(of: ")"),
+           openParen < closeParen {
+            versionNumber = versionDescriptor[..<openParen]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            architecture = versionDescriptor[versionDescriptor.index(after: openParen)..<closeParen]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            versionNumber = versionDescriptor.trimmingCharacters(in: .whitespacesAndNewlines)
+            architecture = nil
+        }
+
+        return EngineDetails(
+            versionNumber: versionNumber.isEmpty ? "Unknown" : versionNumber,
+            architecture: architecture,
+            buildDate: parts.count > 2 ? parts[2] : nil,
+            copyright: parts.count > 1 ? parts[1] : nil,
+            runtimeLine: runtimeLine,
+            platformLine: platformLine,
+            binaryPath: binaryPath
+        )
+    }
+}
+
 /// Wraps the 7zz command-line binary for archive operations.
 @MainActor
 class ArchiveManager: ObservableObject {
@@ -44,31 +120,83 @@ class ArchiveManager: ObservableObject {
     @Published var isLoading = false
     @Published var error: ArchiveError?
     @Published var progress: ArchiveProgress?
+    @Published var engineDetails: EngineDetails?
+    @Published var engineDetailsError: String?
+    @Published var isLoadingEngineDetails = false
 
     private var currentProcess: Process?
 
-    /// Path to the 7zz binary bundled with the app.
-    var binaryPath: String {
-        if let bundlePath = Bundle.main.path(forResource: "7zz", ofType: nil) {
-            return bundlePath
+    private var bundledBinaryPath: String? {
+        guard let bundlePath = Bundle.main.path(forResource: "7zz", ofType: nil),
+              FileManager.default.isExecutableFile(atPath: bundlePath) else {
+            return nil
         }
-        // Fallback: check common install locations
-        let fallbacks = [
+        return bundlePath
+    }
+
+    private var allowsExternalBinaryFallbacks: Bool {
+        #if DEBUG
+        true
+        #else
+        ProcessInfo.processInfo.environment["SEPTAZIP_ALLOW_EXTERNAL_7ZZ"] == "1"
+        #endif
+    }
+
+    private var externalBinaryFallbacks: [String] {
+        [
             "/usr/local/bin/7zz",
             "/opt/homebrew/bin/7zz",
             "\(NSHomeDirectory())/.local/bin/7zz"
         ]
-        for path in fallbacks {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
+    }
+
+    /// Path to the 7zz binary bundled with the app.
+    var binaryPath: String {
+        if let bundledBinaryPath {
+            return bundledBinaryPath
+        }
+
+        if allowsExternalBinaryFallbacks {
+            for path in externalBinaryFallbacks {
+                if FileManager.default.isExecutableFile(atPath: path) {
+                    return path
+                }
             }
         }
+
         return ""
     }
 
     /// Check if the 7zz binary is available.
     var isBinaryAvailable: Bool {
         FileManager.default.isExecutableFile(atPath: binaryPath)
+    }
+
+    var isUsingBundledBinary: Bool {
+        guard !binaryPath.isEmpty else { return false }
+        return binaryPath == bundledBinaryPath
+    }
+
+    func refreshEngineDetails(force: Bool = false) async {
+        guard force || engineDetails == nil else { return }
+        guard !isLoadingEngineDetails else { return }
+        guard isBinaryAvailable else {
+            engineDetails = nil
+            engineDetailsError = ArchiveError.binaryNotFound.localizedDescription
+            return
+        }
+
+        isLoadingEngineDetails = true
+        defer { isLoadingEngineDetails = false }
+
+        do {
+            let output = try await execute7zz(args: ["i"], trackForCancellation: false)
+            engineDetails = EngineDetails.parse(from: output, binaryPath: binaryPath)
+            engineDetailsError = nil
+        } catch {
+            engineDetails = nil
+            engineDetailsError = error.localizedDescription
+        }
     }
 
     // MARK: - List Archive Contents
@@ -205,6 +333,10 @@ class ArchiveManager: ObservableObject {
 
     /// Execute the 7zz binary with arguments.
     private func run7zz(args: [String]) async throws -> String {
+        try await execute7zz(args: args, trackForCancellation: true)
+    }
+
+    private func execute7zz(args: [String], trackForCancellation: Bool) async throws -> String {
         guard isBinaryAvailable else {
             throw ArchiveError.binaryNotFound
         }
@@ -213,6 +345,11 @@ class ArchiveManager: ObservableObject {
             let process = Process()
             let pipe = Pipe()
             let errorPipe = Pipe()
+            let outputHandle = pipe.fileHandleForReading
+            let errorHandle = errorPipe.fileHandleForReading
+            let lock = NSLock()
+            var outputData = Data()
+            var errorData = Data()
 
             process.executableURL = URL(fileURLWithPath: binaryPath)
             process.arguments = args
@@ -220,34 +357,68 @@ class ArchiveManager: ObservableObject {
             process.standardError = errorPipe
             process.environment = ProcessInfo.processInfo.environment
 
-            self.currentProcess = process
+            if trackForCancellation {
+                self.currentProcess = process
+            }
+
+            outputHandle.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { return }
+                lock.lock()
+                outputData.append(chunk)
+                lock.unlock()
+            }
+
+            errorHandle.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { return }
+                lock.lock()
+                errorData.append(chunk)
+                lock.unlock()
+            }
+
+            process.terminationHandler = { [weak self] proc in
+                outputHandle.readabilityHandler = nil
+                errorHandle.readabilityHandler = nil
+
+                let trailingOutput = outputHandle.readDataToEndOfFile()
+                let trailingError = errorHandle.readDataToEndOfFile()
+
+                lock.lock()
+                outputData.append(trailingOutput)
+                errorData.append(trailingError)
+                let output = String(data: outputData, encoding: .utf8) ?? ""
+                let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
+                lock.unlock()
+
+                Task { @MainActor [weak self] in
+                    if trackForCancellation {
+                        self?.currentProcess = nil
+                    }
+                }
+
+                let status = proc.terminationStatus
+                if status == 0 || status == 1 {
+                    // 0 = success, 1 = warning (non-fatal)
+                    continuation.resume(returning: output)
+                } else if errorOutput.contains("Wrong password") || errorOutput.contains("password") {
+                    continuation.resume(throwing: ArchiveError.passwordRequired)
+                } else {
+                    let message = errorOutput.isEmpty ? output : errorOutput
+                    continuation.resume(throwing: ArchiveError.operationFailed(
+                        message.trimmingCharacters(in: .whitespacesAndNewlines)))
+                }
+            }
 
             do {
                 try process.run()
             } catch {
+                outputHandle.readabilityHandler = nil
+                errorHandle.readabilityHandler = nil
+                if trackForCancellation {
+                    currentProcess = nil
+                }
                 continuation.resume(throwing: ArchiveError.operationFailed(error.localizedDescription))
-                return
-            }
-
-            process.waitUntilExit()
-            self.currentProcess = nil
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
-            let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
-
-            let status = process.terminationStatus
-
-            if status == 0 || status == 1 {
-                // 0 = success, 1 = warning (non-fatal)
-                continuation.resume(returning: output)
-            } else if errorOutput.contains("Wrong password") || errorOutput.contains("password") {
-                continuation.resume(throwing: ArchiveError.passwordRequired)
-            } else {
-                let message = errorOutput.isEmpty ? output : errorOutput
-                continuation.resume(throwing: ArchiveError.operationFailed(
-                    message.trimmingCharacters(in: .whitespacesAndNewlines)))
             }
         }
     }

@@ -1,8 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import Combine
 
 struct MainWindow: View {
     @EnvironmentObject var archiveManager: ArchiveManager
+    @EnvironmentObject var actionRouter: AppActionRouter
     @State private var currentArchivePath: String?
     @State private var selectedItems: Set<ArchiveItem.ID> = []
     @State private var searchText = ""
@@ -16,6 +18,8 @@ struct MainWindow: View {
     @State private var testPassed = false
     @State private var currentPath = "" // For navigating inside archive
     @State private var isDraggingOver = false
+    @State private var pendingCompressionFiles: [URL] = []
+    @State private var pendingExtractArchivePath: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,6 +48,19 @@ struct MainWindow: View {
             // Status bar
             statusBarView
         }
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(nsColor: .windowBackgroundColor),
+                    Color.accentColor.opacity(0.06)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .task {
+            await archiveManager.refreshEngineDetails()
+        }
         .onDrop(of: [.fileURL], isTargeted: $isDraggingOver) { providers in
             handleDrop(providers)
         }
@@ -52,12 +69,16 @@ struct MainWindow: View {
                 dropOverlayView
             }
         }
-        .sheet(isPresented: $showCompressSheet) {
-            CompressView()
+        .sheet(isPresented: $showCompressSheet, onDismiss: {
+            pendingCompressionFiles = []
+        }) {
+            CompressView(initialFiles: pendingCompressionFiles)
                 .environmentObject(archiveManager)
         }
-        .sheet(isPresented: $showExtractSheet) {
-            ExtractView(archivePath: currentArchivePath ?? "")
+        .sheet(isPresented: $showExtractSheet, onDismiss: {
+            pendingExtractArchivePath = nil
+        }) {
+            ExtractView(archivePath: pendingExtractArchivePath ?? currentArchivePath ?? "")
                 .environmentObject(archiveManager)
         }
         .alert("Password Required", isPresented: $showPasswordPrompt) {
@@ -90,11 +111,17 @@ struct MainWindow: View {
                 showOpenPanel()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .compressFiles)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .compressFiles)) { notification in
+            if let urls = notification.object as? [URL] {
+                pendingCompressionFiles = uniqueURLs(urls)
+            } else {
+                pendingCompressionFiles = []
+            }
             showCompressSheet = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .extractAll)) { _ in
             if currentArchivePath != nil {
+                pendingExtractArchivePath = currentArchivePath
                 showExtractSheet = true
             }
         }
@@ -103,52 +130,58 @@ struct MainWindow: View {
                 testArchive(path: path)
             }
         }
-        .navigationTitle(currentArchivePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "7-Zip")
+        .onReceive(actionRouter.$currentAction.compactMap { $0 }) { action in
+            handleExternalAction(action)
+            actionRouter.consume()
+        }
+        .navigationTitle(currentArchivePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "SeptaZip")
     }
 
     // MARK: - Toolbar
 
     private var toolbarView: some View {
         HStack(spacing: 12) {
-            // Open button
-            Button {
-                showOpenPanel()
-            } label: {
-                Label("Open", systemImage: "folder")
-            }
-            .help("Open an archive file")
-
-            // Extract button
-            Button {
-                showExtractSheet = true
-            } label: {
-                Label("Extract", systemImage: "arrow.down.doc")
-            }
-            .disabled(currentArchivePath == nil)
-            .help("Extract files from archive")
-
-            // Compress button
-            Button {
-                showCompressSheet = true
-            } label: {
-                Label("Compress", systemImage: "arrow.up.doc")
-            }
-            .help("Create a new archive")
-
-            // Test button
-            Button {
-                if let path = currentArchivePath {
-                    testArchive(path: path)
+            HStack(spacing: 10) {
+                Button {
+                    showOpenPanel()
+                } label: {
+                    Label("Open", systemImage: "folder")
                 }
-            } label: {
-                Label("Test", systemImage: "checkmark.shield")
+                .buttonStyle(.borderedProminent)
+                .help("Open an archive file")
+
+                Button {
+                    pendingExtractArchivePath = currentArchivePath
+                    showExtractSheet = true
+                } label: {
+                    Label("Extract", systemImage: "arrow.down.doc")
+                }
+                .disabled(currentArchivePath == nil)
+                .help("Extract files from archive")
+
+                Button {
+                    pendingCompressionFiles = []
+                    showCompressSheet = true
+                } label: {
+                    Label("Compress", systemImage: "archivebox")
+                }
+                .help("Create a new archive")
+
+                Button {
+                    if let path = currentArchivePath {
+                        testArchive(path: path)
+                    }
+                } label: {
+                    Label("Test", systemImage: "checkmark.shield")
+                }
+                .disabled(currentArchivePath == nil)
+                .help("Test archive integrity")
             }
-            .disabled(currentArchivePath == nil)
-            .help("Test archive integrity")
+            .buttonStyle(.bordered)
+            .controlSize(.large)
 
             Spacer()
 
-            // Search field
             HStack {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
@@ -165,12 +198,29 @@ struct MainWindow: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(6)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color(.textBackgroundColor)))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(.thinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+            )
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color(.windowBackgroundColor))
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(.white.opacity(0.1), lineWidth: 1)
+        )
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
     }
 
     // MARK: - Breadcrumb
@@ -205,57 +255,92 @@ struct MainWindow: View {
             Spacer()
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 6)
-        .background(Color(.controlBackgroundColor))
+        .padding(.vertical, 8)
+        .background(.thinMaterial)
+        .padding(.top, 6)
     }
 
     // MARK: - Welcome View
 
     private var welcomeView: some View {
-        VStack(spacing: 20) {
-            Spacer()
+        ScrollView {
+            VStack(spacing: 24) {
+                VStack(spacing: 18) {
+                    Image(nsImage: NSApplication.shared.applicationIconImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 92, height: 92)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
 
-            Image(systemName: "doc.zipper")
-                .font(.system(size: 64))
-                .foregroundColor(.secondary)
+                    VStack(spacing: 8) {
+                        Text("SeptaZip")
+                            .font(.system(size: 34, weight: .semibold, design: .rounded))
 
-            Text("7-Zip for Mac")
-                .font(.largeTitle)
-                .fontWeight(.semibold)
-
-            Text("Open an archive or drag files here to compress")
-                .font(.title3)
-                .foregroundColor(.secondary)
-
-            HStack(spacing: 16) {
-                Button("Open Archive") {
-                    showOpenPanel()
+                        Text("Browse, extract, test, and compress archives with the official 7-Zip engine on macOS.")
+                            .font(.title3)
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: 620)
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
 
-                Button("Compress Files") {
-                    showCompressSheet = true
+                HStack(spacing: 14) {
+                    Button("Open Archive") {
+                        showOpenPanel()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+
+                    Button("Compress Files") {
+                        pendingCompressionFiles = []
+                        showCompressSheet = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-            }
 
-            Spacer()
+                HStack(spacing: 14) {
+                    welcomeFeatureCard(
+                        title: "Archive Browser",
+                        detail: "Open ZIP, 7z, RAR, TAR, DMG, ISO, and more.",
+                        systemImage: "square.stack.3d.up.fill"
+                    )
+                    welcomeFeatureCard(
+                        title: "Finder Actions",
+                        detail: "Right-click integration for extract, compress, and test.",
+                        systemImage: "cursorarrow.click.2"
+                    )
+                    welcomeFeatureCard(
+                        title: "Official Engine",
+                        detail: archiveManager.engineDetails?.buildSummary ?? "Built on bundled 7-Zip.",
+                        systemImage: "shippingbox.fill"
+                    )
+                }
 
-            // Supported formats
-            VStack(spacing: 8) {
-                Text("Supported formats")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("7z, ZIP, RAR, TAR, GZ, BZ2, XZ, ZSTD, ISO, DMG, WIM, and 40+ more")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                VStack(spacing: 10) {
+                    Text("Supported formats")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
+
+                    Text("7z, ZIP, RAR, TAR, GZ, BZ2, XZ, ZSTD, ISO, DMG, WIM, and 40+ more")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
-            .padding(.bottom, 20)
+            .padding(32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.textBackgroundColor))
+        .background(
+            LinearGradient(
+                colors: [
+                    Color.accentColor.opacity(0.10),
+                    Color(nsColor: .textBackgroundColor)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
     }
 
     // MARK: - Archive Browser
@@ -334,11 +419,7 @@ struct MainWindow: View {
             if let itemId = items.first,
                let item = archiveManager.items.first(where: { $0.id == itemId }),
                item.isDirectory {
-                if currentPath.isEmpty {
-                    currentPath = item.path
-                } else {
-                    currentPath = item.path
-                }
+                currentPath = item.path
             }
         }
     }
@@ -346,14 +427,27 @@ struct MainWindow: View {
     // MARK: - Loading View
 
     private var loadingView: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
+            Image(systemName: "archivebox.fill")
+                .font(.system(size: 34))
+                .foregroundColor(.accentColor)
             ProgressView()
-                .scaleEffect(1.5)
+                .controlSize(.large)
             Text("Loading archive...")
+                .font(.headline)
+            Text("SeptaZip is reading the archive catalog.")
                 .foregroundColor(.secondary)
         }
+        .padding(28)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(.white.opacity(0.1), lineWidth: 1)
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.textBackgroundColor))
     }
 
     // MARK: - Status Bar
@@ -361,17 +455,13 @@ struct MainWindow: View {
     private var statusBarView: some View {
         HStack {
             if let info = archiveManager.archiveInfo {
-                Text("\(info.totalFiles) files, \(info.totalFolders) folders")
-                Text("·")
-                Text("Size: \(info.formattedTotalSize)")
-                Text("·")
-                Text("Packed: \(info.formattedPhysicalSize)")
-                Text("·")
-                Text("Ratio: \(info.overallRatio)")
-                Text("·")
-                Text("Type: \(info.type)")
+                statusPill("\(info.totalFiles) files · \(info.totalFolders) folders")
+                statusPill("Size \(info.formattedTotalSize)")
+                statusPill("Packed \(info.formattedPhysicalSize)")
+                statusPill("Ratio \(info.overallRatio)")
+                statusPill(info.type)
             } else {
-                Text("Ready")
+                statusPill("Ready")
             }
             Spacer()
             if archiveManager.isLoading {
@@ -382,15 +472,16 @@ struct MainWindow: View {
         .font(.caption)
         .foregroundColor(.secondary)
         .padding(.horizontal, 16)
-        .padding(.vertical, 4)
-        .background(Color(.windowBackgroundColor))
+        .padding(.vertical, 8)
+        .background(.thinMaterial)
     }
 
     // MARK: - Drop Overlay
 
     private var dropOverlayView: some View {
         ZStack {
-            Color.accentColor.opacity(0.1)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.accentColor.opacity(0.12))
 
             VStack(spacing: 12) {
                 Image(systemName: "arrow.down.doc.fill")
@@ -403,6 +494,42 @@ struct MainWindow: View {
         }
         .cornerRadius(12)
         .padding(20)
+    }
+
+    private func welcomeFeatureCard(title: String, detail: String, systemImage: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .foregroundColor(.accentColor)
+
+            Text(title)
+                .font(.headline)
+
+            Text(detail)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, minHeight: 138, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(.white.opacity(0.1), lineWidth: 1)
+        )
+    }
+
+    private func statusPill(_ text: String) -> some View {
+        Text(text)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(Color.primary.opacity(0.08))
+            )
     }
 
     // MARK: - Computed Properties
@@ -478,6 +605,7 @@ struct MainWindow: View {
         currentPath = ""
         selectedItems = []
         searchText = ""
+        pendingExtractArchivePath = nil
 
         Task {
             do {
@@ -561,10 +689,33 @@ struct MainWindow: View {
                 openArchive(path: urls[0].path)
             } else {
                 // Multiple files or non-archive - offer to compress
+                pendingCompressionFiles = uniqueURLs(urls)
                 showCompressSheet = true
             }
         }
         return true
+    }
+
+    private func handleExternalAction(_ action: AppOpenAction) {
+        switch action {
+        case .openArchive(let path):
+            openArchive(path: path)
+        case .compressFiles(let urls):
+            pendingCompressionFiles = uniqueURLs(urls)
+            showCompressSheet = true
+        case .extractArchive(let path):
+            pendingExtractArchivePath = path
+            showExtractSheet = true
+        case .testArchive(let path):
+            testArchive(path: path)
+        }
+    }
+
+    private func uniqueURLs(_ urls: [URL]) -> [URL] {
+        var seen = Set<String>()
+        return urls.filter { url in
+            seen.insert(url.path).inserted
+        }
     }
 
     private func isArchiveFile(_ ext: String) -> Bool {

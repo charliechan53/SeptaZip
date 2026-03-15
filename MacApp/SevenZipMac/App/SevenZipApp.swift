@@ -4,13 +4,15 @@ import SwiftUI
 struct SevenZipApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var archiveManager = ArchiveManager()
+    @StateObject private var actionRouter = AppActionRouter.shared
 
     var body: some Scene {
         // Main archive browser window
         WindowGroup {
             MainWindow()
                 .environmentObject(archiveManager)
-                .frame(minWidth: 800, minHeight: 500)
+                .environmentObject(actionRouter)
+                .frame(minWidth: 920, minHeight: 560)
         }
         .commands {
             // File menu commands
@@ -41,16 +43,10 @@ struct SevenZipApp: App {
             }
         }
 
-        // Compress sheet window
-        Window("Compress", id: "compress") {
-            CompressView()
-                .environmentObject(archiveManager)
-                .frame(minWidth: 500, minHeight: 400)
-        }
-
         // Settings window
         Settings {
             SettingsView()
+                .environmentObject(archiveManager)
         }
     }
 }

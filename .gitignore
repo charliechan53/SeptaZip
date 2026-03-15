@@ -8,7 +8,7 @@ DerivedData/
 xcuserdata/
 
 # 7zz build intermediates
-CPP/7zip/Bundles/Alone2/b/
+source_code/7zip/CPP/7zip/Bundles/Alone2/b/
 
 # macOS
 .DS_Store

@@ -2,6 +2,8 @@
 
 A native macOS app for [7-Zip](https://7-zip.org), built with SwiftUI for Apple Silicon and Intel Macs. **SeptaZip** (Sept = seven in Latin) provides Finder right-click integration, an archive browser, and support for 40+ archive formats.
 
+SeptaZip is powered by the official upstream 7-Zip source maintained by Igor Pavlov and the [ip7z/7zip](https://github.com/ip7z/7zip) repository.
+
 ## Download
 
 Grab the latest DMG from the [Releases](../../releases) page, open it, and drag **SeptaZip** into your Applications folder.
@@ -48,7 +50,7 @@ make build
 make run
 
 # Or open in Xcode directly
-open SevenZipMac.xcodeproj
+open SeptaZip.xcodeproj
 ```
 
 ### Create a DMG for Distribution
@@ -122,7 +124,36 @@ MacApp/
   SevenZipMac/                  # Main app (SwiftUI)
   FinderExtension/              # Finder right-click menu plugin
   QuickActions/                 # Standalone Finder Quick Actions
+
+source_code/7zip/
+  Asm/ C/ CPP/ DOC/             # Upstream 7-Zip source tree
 ```
+
+## Updating 7-Zip Source (Fork Sync)
+
+To keep this fork easy to combine with future 7-Zip source updates:
+
+```bash
+# one-time
+git remote add upstream https://github.com/ip7z/7zip.git
+
+# each update
+git fetch upstream --tags
+./source_code/sync_7zip_source.sh upstream/main
+```
+
+Then rebuild from `MacApp/`:
+
+```bash
+cd MacApp
+make build-7zz
+```
+
+## Upstream Credit
+
+- Core engine: [7-Zip](https://7-zip.org) by Igor Pavlov
+- Official upstream source: [ip7z/7zip](https://github.com/ip7z/7zip)
+- SeptaZip only provides the native macOS app, Finder integration, packaging, and UI around that official engine
 
 ## Generating the App Icon
 
@@ -133,11 +164,11 @@ cd MacApp
 ./Scripts/generate-septazip-icon.sh
 ```
 
-This creates a modern macOS squircle icon with a metallic 'S' that subtly forms the number '7', set against a deep navy blue background with silver zipper teeth.
+This creates a modern macOS squircle icon with a warm sunset gradient, a dark inset plate, and a stylized '7' zipper mark.
 
 ## License
 
 7-Zip is Copyright (C) Igor Pavlov, licensed under the GNU LGPL.
-See [DOC/License.txt](DOC/License.txt) for details.
+See [source_code/7zip/DOC/License.txt](source_code/7zip/DOC/License.txt) for details.
 
-**SeptaZip** is a macOS wrapper/frontend for 7-Zip and follows the same license.
+**SeptaZip** is a macOS wrapper/frontend around the official 7-Zip source and follows the same license.
