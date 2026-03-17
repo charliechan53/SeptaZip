@@ -23,7 +23,6 @@ struct MainWindow: View {
     @State private var pendingExtractArchivePath: String?
     @State private var activeExternalAction: AppOpenAction?
     @State private var resumeExternalQueueAfterPasswordPrompt = false
-    @State private var backgroundExternalActionInProgress = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -190,15 +189,6 @@ struct MainWindow: View {
             if !isPresented {
                 processQueuedActionsIfPossible()
             }
-        }
-        .onReceive(archiveManager.$progress) { _ in
-            updateExternalProgressPanelIfNeeded()
-        }
-        .onReceive(archiveManager.$currentOperationKind) { _ in
-            updateExternalProgressPanelIfNeeded()
-        }
-        .onReceive(archiveManager.$currentOperationTitle) { _ in
-            updateExternalProgressPanelIfNeeded()
         }
         .navigationTitle(currentArchivePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "SeptaZip")
     }
@@ -775,39 +765,6 @@ struct MainWindow: View {
         processQueuedActionsIfPossible()
     }
 
-    private func beginBackgroundExternalOperation() {
-        backgroundExternalActionInProgress = true
-        orderOutStandardWindows()
-        updateExternalProgressPanelIfNeeded()
-    }
-
-    private func endBackgroundExternalOperation() {
-        backgroundExternalActionInProgress = false
-        ExternalProgressPanelController.shared.hide()
-    }
-
-    private func updateExternalProgressPanelIfNeeded() {
-        guard backgroundExternalActionInProgress,
-              archiveManager.currentOperationKind.supportsProgress,
-              let progress = archiveManager.progress else {
-            ExternalProgressPanelController.shared.hide()
-            return
-        }
-
-        ExternalProgressPanelController.shared.show(
-            title: archiveManager.currentOperationTitle,
-            progress: progress
-        ) {
-            archiveManager.cancel()
-        }
-    }
-
-    private func orderOutStandardWindows() {
-        for window in NSApp.windows where !(window is NSPanel) {
-            window.orderOut(nil)
-        }
-    }
-
     private func showBackgroundNotification(title: String, body: String) {
         let content = UNMutableNotificationContent()
         content.title = title
@@ -821,16 +778,8 @@ struct MainWindow: View {
     }
 
     private func handleExternalOperationError(_ error: Error) {
-        if backgroundExternalActionInProgress {
-            showBackgroundNotification(
-                title: archiveManager.currentOperationTitle,
-                body: error.localizedDescription
-            )
-            endBackgroundExternalOperation()
-        } else {
-            errorMessage = error.localizedDescription
-            showError = true
-        }
+        errorMessage = error.localizedDescription
+        showError = true
     }
 
     private func openArchive(
@@ -950,21 +899,14 @@ struct MainWindow: View {
                 finishQueuedExternalAction()
             }
         case .compressFiles(let urls):
-            backgroundExternalActionInProgress = false
             pendingCompressionFiles = uniqueURLs(urls)
             showCompressSheet = true
-        case .quickCompress(let urls, let format):
-            beginBackgroundExternalOperation()
-            runQuickCompression(for: uniqueURLs(urls), format: format) {
-                finishQueuedExternalAction()
-            }
+        case .quickCompress:
+            finishQueuedExternalAction()
         case .extractArchives(let urls, let mode):
             handleExternalExtract(urls: uniqueURLs(urls), mode: mode)
-        case .testArchives(let urls):
-            beginBackgroundExternalOperation()
-            runQuickArchiveTest(for: uniqueURLs(urls)) {
-                finishQueuedExternalAction()
-            }
+        case .testArchives:
+            finishQueuedExternalAction()
         }
     }
 
@@ -977,47 +919,10 @@ struct MainWindow: View {
 
         switch mode {
         case .prompt:
-            backgroundExternalActionInProgress = false
             pendingExtractArchivePath = archiveURLs[0].path
             showExtractSheet = true
         case .sameFolder, .subfolder:
-            beginBackgroundExternalOperation()
-            runQuickExtraction(for: archiveURLs, mode: mode) {
-                finishQueuedExternalAction()
-            }
-        }
-    }
-
-    private func runQuickExtraction(
-        for urls: [URL],
-        mode: ExternalExtractMode,
-        completion: (() -> Void)? = nil
-    ) {
-        Task {
-            do {
-                var revealedPath: String?
-
-                for url in urls {
-                    let destination = try extractDestination(for: url, mode: mode)
-                    try await archiveManager.extract(
-                        archive: url.path,
-                        to: destination,
-                        overwrite: true
-                    )
-                    if revealedPath == nil {
-                        revealedPath = destination
-                    }
-                }
-
-                if let revealedPath {
-                    completeExternalArchiveOperation(revealPath: revealedPath)
-                }
-                endBackgroundExternalOperation()
-                completion?()
-            } catch {
-                handleExternalOperationError(error)
-                completion?()
-            }
+            finishQueuedExternalAction()
         }
     }
 
@@ -1039,83 +944,6 @@ struct MainWindow: View {
             return destination.path
         case .prompt:
             return parentDirectory.path
-        }
-    }
-
-    private func runQuickCompression(
-        for urls: [URL],
-        format: ArchiveFormat,
-        completion: (() -> Void)? = nil
-    ) {
-        guard !urls.isEmpty else {
-            completion?()
-            return
-        }
-        let outputPath = suggestedArchivePath(for: urls, format: format)
-
-        Task {
-            do {
-                try await archiveManager.compress(
-                    files: urls.map(\.path),
-                    to: outputPath,
-                    format: format
-                )
-                completeExternalArchiveOperation(revealPath: outputPath, isFile: true)
-                endBackgroundExternalOperation()
-                completion?()
-            } catch {
-                handleExternalOperationError(error)
-                completion?()
-            }
-        }
-    }
-
-    private func suggestedArchivePath(for urls: [URL], format: ArchiveFormat) -> String {
-        let firstURL = urls[0]
-        let directory = firstURL.deletingLastPathComponent().path
-        let baseName: String
-
-        if urls.count == 1 {
-            baseName = firstURL.deletingPathExtension().lastPathComponent
-        } else {
-            baseName = "Archive"
-        }
-
-        return "\(directory)/\(baseName).\(format.fileExtension)"
-    }
-
-    private func runQuickArchiveTest(for urls: [URL], completion: (() -> Void)? = nil) {
-        let archiveURLs = urls.filter { !$0.hasDirectoryPath }
-        guard !archiveURLs.isEmpty else {
-            completion?()
-            return
-        }
-
-        Task {
-            do {
-                var allPassed = true
-                for url in archiveURLs {
-                    allPassed = try await archiveManager.testArchive(at: url.path) && allPassed
-                }
-                if backgroundExternalActionInProgress {
-                    let resultTitle = allPassed ? "Archive Test Passed" : "Archive Test Failed"
-                    let resultBody: String
-                    if archiveURLs.count == 1 {
-                        resultBody = archiveURLs[0].lastPathComponent
-                    } else {
-                        resultBody = "\(archiveURLs.count) archives checked"
-                    }
-                    showBackgroundNotification(title: resultTitle, body: resultBody)
-                    endBackgroundExternalOperation()
-                } else {
-                    testPassed = allPassed
-                    showTestResult = true
-                }
-                completion?()
-            } catch {
-                handleExternalOperationError(error)
-                completion?()
-            }
         }
     }
 
@@ -1181,62 +1009,5 @@ private struct ExternalProgressPanelView: View {
         .padding(16)
         .frame(width: 320)
         .background(.regularMaterial)
-    }
-}
-
-private final class ExternalProgressPanelController {
-    static let shared = ExternalProgressPanelController()
-
-    private let model = ExternalProgressPanelModel()
-    private var panel: NSPanel?
-
-    private init() {}
-
-    func show(title: String, progress: ArchiveProgress, cancelAction: @escaping () -> Void) {
-        model.title = title
-        model.currentFile = progress.currentFile
-        model.percentage = progress.percentage
-        model.cancelAction = cancelAction
-
-        let panel = panel ?? makePanel()
-        panel.contentView = NSHostingView(rootView: ExternalProgressPanelView(model: model))
-        position(panel)
-        panel.orderFrontRegardless()
-    }
-
-    func hide() {
-        model.cancelAction = nil
-        panel?.orderOut(nil)
-    }
-
-    private func makePanel() -> NSPanel {
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 126),
-            styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        panel.isFloatingPanel = true
-        panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .moveToActiveSpace]
-        panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = true
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.standardWindowButton(.closeButton)?.isHidden = true
-        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        panel.standardWindowButton(.zoomButton)?.isHidden = true
-        self.panel = panel
-        return panel
-    }
-
-    private func position(_ panel: NSPanel) {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
-        let visibleFrame = screen.visibleFrame
-        let origin = NSPoint(
-            x: visibleFrame.maxX - panel.frame.width - 24,
-            y: visibleFrame.maxY - panel.frame.height - 24
-        )
-        panel.setFrameOrigin(origin)
     }
 }

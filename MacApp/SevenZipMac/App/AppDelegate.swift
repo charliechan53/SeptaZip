@@ -2,6 +2,7 @@ import Cocoa
 import SwiftUI
 import UserNotifications
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let serviceProvider = ServiceProvider()
@@ -16,11 +17,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     ]
     private var consumedActionIDs: [String: Date] = [:]
 
+    private struct FinderActionFile: Codable {
+        let path: String
+        let bookmarkData: Data?
+    }
+
     private struct FinderActionPayload: Codable {
         let id: String?
         let createdAt: Date?
         let action: String
-        let files: [String]
+        let files: [FinderActionFile]
         let format: String?
     }
 
@@ -74,13 +80,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func handleFinderActionNotification(_ notification: Notification) {
+        consumePendingFinderActionsIfNeeded()
+
         if let action = action(from: notification) {
             Task { @MainActor in
                 route(action)
             }
-            return
         }
-        consumePendingFinderActionsIfNeeded()
     }
 
     private func openArchive(at path: String) {
@@ -92,14 +98,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleIncoming(urls: [URL]) {
         guard !urls.isEmpty else { return }
+        let accessibleURLs = urls.map { SecurityScopedAccessManager.shared.retainAccess(to: $0) }
 
-        if let archiveURL = urls.first(where: isArchiveURL(_:)) {
+        if let archiveURL = accessibleURLs.first(where: isArchiveURL(_:)) {
             openArchive(at: archiveURL.path)
             return
         }
 
         Task { @MainActor in
-            AppActionRouter.shared.dispatch(.compressFiles(urls))
+            AppActionRouter.shared.dispatch(.compressFiles(accessibleURLs))
         }
     }
 
@@ -152,7 +159,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 action: legacyPayload.action,
                 files: legacyPayload.files
                     .split(separator: "\n")
-                    .map(String.init),
+                    .map { FinderActionFile(path: String($0), bookmarkData: nil) },
                 format: nil
             )]
         }
@@ -179,7 +186,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             id: userInfo["id"] as? String,
             createdAt: (userInfo["createdAt"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)),
             action: userInfo["action"] as? String ?? "",
-            files: userInfo["files"] as? [String] ?? [],
+            files: (userInfo["files"] as? [String] ?? []).map {
+                FinderActionFile(path: $0, bookmarkData: nil)
+            },
             format: userInfo["format"] as? String
         )
 
@@ -212,7 +221,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func action(from payload: FinderActionPayload) -> AppOpenAction? {
-        let urls = payload.files.map { URL(fileURLWithPath: $0) }
+        let urls = payload.files.filter { isSafePath($0.path) }.map(resolveFinderActionFile(_:))
         guard !urls.isEmpty else { return nil }
 
         switch payload.action {
@@ -238,6 +247,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         return nil
+    }
+
+    private func isSafePath(_ path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        return !path.components(separatedBy: "/").contains("..")
+    }
+
+    private func resolveFinderActionFile(_ file: FinderActionFile) -> URL {
+        SecurityScopedAccessManager.shared.resolveURL(
+            path: file.path,
+            bookmarkData: file.bookmarkData
+        )
     }
 
     private func archiveFormat(from rawFormat: String?) -> ArchiveFormat? {

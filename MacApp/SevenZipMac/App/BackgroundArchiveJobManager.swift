@@ -234,7 +234,6 @@ final class BackgroundArchiveJobManager: ObservableObject {
         let job = BackgroundArchiveJob(action: action, label: label)
         jobs.append(job)
         pruneFinishedJobs()
-        orderOutStandardWindows()
         BackgroundArchiveJobsPanelController.shared.present(using: self)
         return job
     }
@@ -336,11 +335,6 @@ final class BackgroundArchiveJobManager: ObservableObject {
         }
     }
 
-    private func orderOutStandardWindows() {
-        for window in NSApp.windows where !(window is NSPanel) {
-            window.orderOut(nil)
-        }
-    }
 }
 
 private struct BackgroundArchiveJobsPanelView: View {

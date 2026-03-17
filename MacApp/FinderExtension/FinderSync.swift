@@ -8,11 +8,16 @@ class FinderSync: FIFinderSync {
     private let actionPasteboardType = NSPasteboard.PasteboardType("com.septazip.action.payload")
     private let actionNotificationName = Notification.Name("com.septazip.finder-action-posted")
 
+    private struct FinderActionFile: Codable {
+        let path: String
+        let bookmarkData: Data?
+    }
+
     private struct FinderActionPayload: Codable {
         let id: String
         let createdAt: Date
         let action: String
-        let files: [String]
+        let files: [FinderActionFile]
         let format: String?
     }
 
@@ -167,8 +172,9 @@ class FinderSync: FIFinderSync {
     }
 
     @objc func extractToChosen(_ sender: NSMenuItem) {
-        guard let firstArchive = selectedFileURLs().first else { return }
-        openMainApp(action: "extract", urls: [firstArchive])
+        let archives = selectedFileURLs()
+        guard !archives.isEmpty else { return }
+        openMainApp(action: "extract", urls: archives)
     }
 
     @objc func openInApp(_ sender: NSMenuItem) {
@@ -261,12 +267,11 @@ class FinderSync: FIFinderSync {
 
         let appBundleId = "com.septazip.SeptaZip"
         let workspace = NSWorkspace.shared
-        let filePaths = urls.map(\.path)
         let payload = FinderActionPayload(
             id: UUID().uuidString,
             createdAt: Date(),
             action: action,
-            files: filePaths,
+            files: urls.map(makeFinderActionFile(from:)),
             format: format
         )
 
@@ -338,7 +343,7 @@ class FinderSync: FIFinderSync {
             "id": payload.id,
             "createdAt": payload.createdAt.timeIntervalSince1970,
             "action": payload.action,
-            "files": payload.files
+            "files": payload.files.map(\.path)
         ]
         if let format = payload.format {
             info["format"] = format
@@ -353,5 +358,18 @@ class FinderSync: FIFinderSync {
         default:
             return false
         }
+    }
+
+    private func makeFinderActionFile(from url: URL) -> FinderActionFile {
+        let bookmarkData = try? url.bookmarkData(
+            options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+
+        return FinderActionFile(
+            path: url.path,
+            bookmarkData: bookmarkData
+        )
     }
 }
