@@ -41,6 +41,13 @@ struct SevenZipApp: App {
                     NotificationCenter.default.post(name: .testArchive, object: nil)
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Show Job Manager") {
+                    BackgroundArchiveJobManager.shared.showPanel()
+                }
+                .keyboardShortcut("j", modifiers: [.command, .shift])
             }
         }
 

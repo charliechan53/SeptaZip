@@ -1,9 +1,11 @@
 import Foundation
 import Combine
+import Security
 
 /// Error types for archive operations.
 enum ArchiveError: LocalizedError {
     case binaryNotFound
+    case sandboxedBuildUnsupported
     case operationFailed(String)
     case parseError(String)
     case cancelled
@@ -14,6 +16,8 @@ enum ArchiveError: LocalizedError {
         switch self {
         case .binaryNotFound:
             return "7zz binary not found. Please rebuild the app or run the build script."
+        case .sandboxedBuildUnsupported:
+            return "This SeptaZip build is sandboxed. The app launches the bundled 7zz tool as a child process, and a sandboxed parent app cannot grant that child access to user-selected files. Rebuild or install an unsandboxed Release/direct-download build."
         case .operationFailed(let msg):
             return "Operation failed: \(msg)"
         case .parseError(let msg):
@@ -159,6 +163,20 @@ class ArchiveManager: ObservableObject {
     @Published private(set) var currentOperationTitle = "Ready"
 
     private var currentProcess: Process?
+
+    private var isRunningSandboxed: Bool {
+        guard let task = SecTaskCreateFromSelf(nil) else {
+            return false
+        }
+
+        let value = SecTaskCopyValueForEntitlement(
+            task,
+            "com.apple.security.app-sandbox" as CFString,
+            nil
+        )
+
+        return (value as? Bool) == true
+    }
 
     private var bundledBinaryPath: String? {
         guard let bundlePath = Bundle.main.path(forResource: "7zz", ofType: nil),
@@ -373,6 +391,10 @@ class ArchiveManager: ObservableObject {
     private func execute7zz(args: [String], trackForCancellation: Bool) async throws -> String {
         guard isBinaryAvailable else {
             throw ArchiveError.binaryNotFound
+        }
+
+        guard !isRunningSandboxed else {
+            throw ArchiveError.sandboxedBuildUnsupported
         }
 
         return try await withCheckedThrowingContinuation { continuation in

@@ -4,38 +4,56 @@ import UserNotifications
 
 class FinderSync: FIFinderSync {
     private var lastSelectedItems: [URL] = []
-    private let actionPasteboardName = NSPasteboard.Name("com.septazip.action")
-    private let actionPasteboardType = NSPasteboard.PasteboardType("com.septazip.action.payload")
     private let actionNotificationName = Notification.Name("com.septazip.finder-action-posted")
-
-    private struct FinderActionFile: Codable {
-        let path: String
-        let bookmarkData: Data?
-    }
+    private let actionQueueDirectoryName = "SeptaZipFinderActions"
+    private let sharedAppGroupIdentifier = "com.septazip.shared"
+    private let duplicateActionWindow: TimeInterval = 2.0
+    private let lastDispatchedSignatureDefaultsKey = "finder.lastDispatchedSignature"
+    private let lastDispatchedTimestampDefaultsKey = "finder.lastDispatchedTimestamp"
+    private var lastDispatchedActionSignature: String?
+    private var lastDispatchedActionTime = Date.distantPast
 
     private struct FinderActionPayload: Codable {
         let id: String
         let createdAt: Date
         let action: String
-        let files: [FinderActionFile]
+        let files: [String]
         let format: String?
     }
 
     override init() {
         super.init()
-        // Monitor all directories - the extension will show context menus everywhere
-        FIFinderSyncController.default().directoryURLs = [URL(fileURLWithPath: "/")]
+        refreshMonitoredDirectories()
+        let workspaceNotificationCenter = NSWorkspace.shared.notificationCenter
+        workspaceNotificationCenter.addObserver(
+            self,
+            selector: #selector(refreshMonitoredDirectories),
+            name: NSWorkspace.didMountNotification,
+            object: nil
+        )
+        workspaceNotificationCenter.addObserver(
+            self,
+            selector: #selector(refreshMonitoredDirectories),
+            name: NSWorkspace.didUnmountNotification,
+            object: nil
+        )
         // Request notification permission for operation feedback
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
     // MARK: - Context Menu for selected items
 
     override func menu(for menuKind: FIMenuKind) -> NSMenu? {
-        guard menuKind == .contextualMenuForItems else { return nil }
+        guard menuKind == .contextualMenuForItems || menuKind == .contextualMenuForContainer else {
+            return nil
+        }
 
         let menu = NSMenu(title: "7-Zip")
-        let selectedItems = FIFinderSyncController.default().selectedItemURLs() ?? []
+        let selectedItems = currentContextURLs(for: menuKind)
         let selectedFiles = selectedItems.filter { !$0.hasDirectoryPath }
         lastSelectedItems = selectedItems
 
@@ -217,11 +235,34 @@ class FinderSync: FIFinderSync {
     }
 
     private func selectedItemURLs() -> [URL] {
-        let currentSelection = FIFinderSyncController.default().selectedItemURLs() ?? []
+        let controller = FIFinderSyncController.default()
+        let currentSelection = controller.selectedItemURLs() ?? []
         if currentSelection.isEmpty {
+            if let targetedURL = controller.targetedURL() {
+                return [targetedURL]
+            }
             return lastSelectedItems
         }
         return currentSelection
+    }
+
+    private func currentContextURLs(for menuKind: FIMenuKind) -> [URL] {
+        let controller = FIFinderSyncController.default()
+        let selectedItems = controller.selectedItemURLs() ?? []
+        if !selectedItems.isEmpty {
+            return selectedItems
+        }
+
+        switch menuKind {
+        case .contextualMenuForItems, .contextualMenuForContainer:
+            if let targetedURL = controller.targetedURL() {
+                return [targetedURL]
+            }
+        default:
+            break
+        }
+
+        return lastSelectedItems
     }
 
     private func menuSymbol(_ systemName: String, description: String) -> NSImage? {
@@ -265,27 +306,41 @@ class FinderSync: FIFinderSync {
     private func openMainApp(action: String, urls: [URL], format: String? = nil) {
         guard !urls.isEmpty else { return }
 
+        let normalizedPaths = urls
+            .map { $0.standardizedFileURL.path }
+            .sorted()
+        let signature = ([action, format ?? ""] + normalizedPaths)
+            .joined(separator: "|")
+        let now = Date()
+        if shouldSuppressDuplicateDispatch(signature: signature, now: now) {
+            return
+        }
+
         let appBundleId = "com.septazip.SeptaZip"
         let workspace = NSWorkspace.shared
+        let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: appBundleId)
         let payload = FinderActionPayload(
             id: UUID().uuidString,
             createdAt: Date(),
             action: action,
-            files: urls.map(makeFinderActionFile(from:)),
+            files: urls.map(\.path),
             format: format
         )
+        guard enqueueFinderAction(payload) else {
+            showNotification(
+                title: "7-Zip Error",
+                message: "Failed to queue Finder action."
+            )
+            return
+        }
 
-        let pb = NSPasteboard(name: actionPasteboardName)
-        var queuedPayloads = readQueuedPayloads(from: pb)
-        queuedPayloads.append(payload)
-        writeQueuedPayloads(queuedPayloads, to: pb)
-
-        DistributedNotificationCenter.default().postNotificationName(
-            actionNotificationName,
-            object: nil,
-            userInfo: notificationUserInfo(for: payload),
-            deliverImmediately: true
-        )
+        if !runningApps.isEmpty {
+            if shouldActivateApp(for: action) {
+                runningApps.first?.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+            }
+            notifyMainApp(repeats: 2)
+            return
+        }
 
         let config = NSWorkspace.OpenConfiguration()
         config.activates = shouldActivateApp(for: action)
@@ -297,6 +352,8 @@ class FinderSync: FIFinderSync {
                     title: "7-Zip Error",
                     message: "Failed to open app: \(error.localizedDescription)"
                 )
+            } else {
+                self.notifyMainApp(repeats: 8)
             }
         }
     }
@@ -313,44 +370,6 @@ class FinderSync: FIFinderSync {
         UNUserNotificationCenter.current().add(request)
     }
 
-    private func readQueuedPayloads(from pasteboard: NSPasteboard) -> [FinderActionPayload] {
-        guard let data = pasteboard.data(forType: actionPasteboardType) else {
-            return []
-        }
-
-        if let payloads = try? JSONDecoder().decode([FinderActionPayload].self, from: data) {
-            return payloads
-        }
-
-        if let payload = try? JSONDecoder().decode(FinderActionPayload.self, from: data) {
-            return [payload]
-        }
-
-        return []
-    }
-
-    private func writeQueuedPayloads(_ payloads: [FinderActionPayload], to pasteboard: NSPasteboard) {
-        pasteboard.clearContents()
-        guard !payloads.isEmpty,
-              let data = try? JSONEncoder().encode(payloads) else {
-            return
-        }
-        pasteboard.setData(data, forType: actionPasteboardType)
-    }
-
-    private func notificationUserInfo(for payload: FinderActionPayload) -> [AnyHashable: Any] {
-        var info: [AnyHashable: Any] = [
-            "id": payload.id,
-            "createdAt": payload.createdAt.timeIntervalSince1970,
-            "action": payload.action,
-            "files": payload.files.map(\.path)
-        ]
-        if let format = payload.format {
-            info["format"] = format
-        }
-        return info
-    }
-
     private func shouldActivateApp(for action: String) -> Bool {
         switch action {
         case "open", "extract", "compress":
@@ -360,16 +379,93 @@ class FinderSync: FIFinderSync {
         }
     }
 
-    private func makeFinderActionFile(from url: URL) -> FinderActionFile {
-        let bookmarkData = try? url.bookmarkData(
-            options: [.withSecurityScope],
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        )
+    private func notifyMainApp(repeats: Int) {
+        let notificationCenter = DistributedNotificationCenter.default()
 
-        return FinderActionFile(
-            path: url.path,
-            bookmarkData: bookmarkData
-        )
+        for attempt in 0..<max(repeats, 1) {
+            let delay = 0.2 * Double(attempt)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                notificationCenter.postNotificationName(
+                    self.actionNotificationName,
+                    object: nil,
+                    userInfo: nil,
+                    deliverImmediately: true
+                )
+            }
+        }
+    }
+
+    private func enqueueFinderAction(_ payload: FinderActionPayload) -> Bool {
+        guard let queueDirectoryURL = actionQueueDirectoryURL() else { return false }
+        do {
+            try FileManager.default.createDirectory(
+                at: queueDirectoryURL,
+                withIntermediateDirectories: true
+            )
+            let fileName = "finder-action-\(Int(payload.createdAt.timeIntervalSince1970 * 1000))-\(payload.id).json"
+            let fileURL = queueDirectoryURL.appendingPathComponent(fileName)
+            let payloadData = try JSONEncoder().encode(payload)
+            try payloadData.write(to: fileURL, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func actionQueueDirectoryURL() -> URL? {
+        if let groupContainerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: sharedAppGroupIdentifier
+        ) {
+            return groupContainerURL.appendingPathComponent(
+                actionQueueDirectoryName,
+                isDirectory: true
+            )
+        }
+
+        guard let appSupportURL = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            return nil
+        }
+
+        return appSupportURL.appendingPathComponent(actionQueueDirectoryName, isDirectory: true)
+    }
+
+    private func shouldSuppressDuplicateDispatch(signature: String, now: Date) -> Bool {
+        if signature == lastDispatchedActionSignature,
+           now.timeIntervalSince(lastDispatchedActionTime) < duplicateActionWindow {
+            return true
+        }
+
+        let defaults = UserDefaults.standard
+        let sharedSignature = defaults.string(forKey: lastDispatchedSignatureDefaultsKey)
+        let sharedTimestamp = defaults.double(forKey: lastDispatchedTimestampDefaultsKey)
+        if let sharedSignature,
+           signature == sharedSignature,
+           sharedTimestamp > 0 {
+            let sharedTime = Date(timeIntervalSince1970: sharedTimestamp)
+            if now.timeIntervalSince(sharedTime) < duplicateActionWindow {
+                lastDispatchedActionSignature = signature
+                lastDispatchedActionTime = now
+                return true
+            }
+        }
+
+        lastDispatchedActionSignature = signature
+        lastDispatchedActionTime = now
+        defaults.set(signature, forKey: lastDispatchedSignatureDefaultsKey)
+        defaults.set(now.timeIntervalSince1970, forKey: lastDispatchedTimestampDefaultsKey)
+        return false
+    }
+
+    @objc private func refreshMonitoredDirectories() {
+        var monitoredURLs = Set<URL>()
+        monitoredURLs.insert(URL(fileURLWithPath: "/"))
+        // Monitoring /Volumes keeps external-drive menus available without
+        // treating each mounted volume root as a decorated sync folder.
+        monitoredURLs.insert(URL(fileURLWithPath: "/Volumes"))
+
+        FIFinderSyncController.default().directoryURLs = monitoredURLs
     }
 }

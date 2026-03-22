@@ -126,6 +126,7 @@ final class BackgroundArchiveJobManager: ObservableObject {
     static let shared = BackgroundArchiveJobManager()
 
     @Published private(set) var jobs: [BackgroundArchiveJob] = []
+    @Published private(set) var isPanelManuallyHidden = false
 
     private let completionRetention: TimeInterval = 8
 
@@ -142,7 +143,22 @@ final class BackgroundArchiveJobManager: ObservableObject {
         }
     }
 
+    var hasVisibleJobs: Bool {
+        !visibleJobs.isEmpty
+    }
+
+    func showPanel() {
+        isPanelManuallyHidden = false
+        BackgroundArchiveJobsPanelController.shared.present(using: self, forceVisible: true)
+    }
+
+    func hidePanel() {
+        isPanelManuallyHidden = true
+        BackgroundArchiveJobsPanelController.shared.hide()
+    }
+
     func handle(_ action: AppOpenAction) -> Bool {
+        NSLog("BackgroundArchiveJobManager.handle called with %@", String(describing: action))
         guard action.isBackgroundJob else { return false }
 
         switch action {
@@ -165,6 +181,7 @@ final class BackgroundArchiveJobManager: ObservableObject {
 
     private func startCompressionJob(for urls: [URL], format: ArchiveFormat) {
         guard !urls.isEmpty else { return }
+        NSLog("BackgroundArchiveJobManager starting compression job for %@", urls.map(\.path).joined(separator: ", "))
 
         let outputPath = suggestedArchivePath(for: urls, format: format)
         let label = "Compress \(URL(fileURLWithPath: outputPath).lastPathComponent)"
@@ -188,6 +205,7 @@ final class BackgroundArchiveJobManager: ObservableObject {
     }
 
     private func startExtractionJob(for url: URL, mode: ExternalExtractMode) {
+        NSLog("BackgroundArchiveJobManager starting extraction job for %@", url.path)
         let label = "Extract \(url.lastPathComponent)"
         let job = makeJob(action: .extractArchives([url], mode), label: label)
 
@@ -210,6 +228,7 @@ final class BackgroundArchiveJobManager: ObservableObject {
     }
 
     private func startTestJob(for url: URL) {
+        NSLog("BackgroundArchiveJobManager starting test job for %@", url.path)
         let label = "Test \(url.lastPathComponent)"
         let job = makeJob(action: .testArchives([url]), label: label)
 
@@ -234,7 +253,9 @@ final class BackgroundArchiveJobManager: ObservableObject {
         let job = BackgroundArchiveJob(action: action, label: label)
         jobs.append(job)
         pruneFinishedJobs()
-        BackgroundArchiveJobsPanelController.shared.present(using: self)
+        if !isPanelManuallyHidden {
+            BackgroundArchiveJobsPanelController.shared.present(using: self)
+        }
         return job
     }
 
@@ -259,13 +280,22 @@ final class BackgroundArchiveJobManager: ObservableObject {
 
     private func finish(_ job: BackgroundArchiveJob) {
         pruneFinishedJobs()
-        BackgroundArchiveJobsPanelController.shared.present(using: self)
+        if !isPanelManuallyHidden {
+            BackgroundArchiveJobsPanelController.shared.present(using: self)
+        } else if visibleJobs.isEmpty {
+            // Once all jobs are gone, reset manual hide for the next job cycle.
+            isPanelManuallyHidden = false
+        }
 
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(completionRetention * 1_000_000_000))
             self?.pruneFinishedJobs()
             if let self {
-                BackgroundArchiveJobsPanelController.shared.present(using: self)
+                if !self.isPanelManuallyHidden {
+                    BackgroundArchiveJobsPanelController.shared.present(using: self)
+                } else if self.visibleJobs.isEmpty {
+                    self.isPanelManuallyHidden = false
+                }
             }
         }
     }
@@ -325,7 +355,59 @@ final class BackgroundArchiveJobManager: ObservableObject {
             baseName = "Archive"
         }
 
-        return "\(directory)/\(baseName).\(format.fileExtension)"
+        let proposedPath = "\(directory)/\(baseName).\(format.fileExtension)"
+        return uniqueArchivePath(
+            proposedPath,
+            avoiding: Set(urls.map { $0.standardizedFileURL.path })
+        )
+    }
+
+    private func uniqueArchivePath(_ path: String, avoiding avoidedPaths: Set<String>) -> String {
+        let fileManager = FileManager.default
+        let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+
+        if !avoidedPaths.contains(standardizedPath),
+           !fileManager.fileExists(atPath: standardizedPath) {
+            return standardizedPath
+        }
+
+        let url = URL(fileURLWithPath: standardizedPath)
+        let directory = url.deletingLastPathComponent()
+        let filename = url.lastPathComponent
+
+        let baseName: String
+        let fullExtension: String
+
+        if filename.hasSuffix(".tar.gz") {
+            baseName = String(filename.dropLast(".tar.gz".count))
+            fullExtension = "tar.gz"
+        } else if filename.hasSuffix(".tar.bz2") {
+            baseName = String(filename.dropLast(".tar.bz2".count))
+            fullExtension = "tar.bz2"
+        } else if filename.hasSuffix(".tar.xz") {
+            baseName = String(filename.dropLast(".tar.xz".count))
+            fullExtension = "tar.xz"
+        } else {
+            fullExtension = url.pathExtension
+            baseName = url.deletingPathExtension().lastPathComponent
+        }
+
+        for index in 2...999 {
+            let candidate = directory
+                .appendingPathComponent("\(baseName) \(index).\(fullExtension)")
+                .standardizedFileURL
+                .path
+
+            if avoidedPaths.contains(candidate) {
+                continue
+            }
+
+            if !fileManager.fileExists(atPath: candidate) {
+                return candidate
+            }
+        }
+
+        return standardizedPath
     }
 
     private func uniqueURLs(_ urls: [URL]) -> [URL] {
@@ -349,11 +431,30 @@ private struct BackgroundArchiveJobsPanelView: View {
                 Text("\(manager.visibleJobs.count)")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(.secondary)
+
+                Button {
+                    manager.hidePanel()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Hide jobs panel")
             }
 
-            ForEach(manager.visibleJobs) { job in
-                BackgroundArchiveJobRow(job: job) {
-                    manager.cancelJob(job)
+            if manager.visibleJobs.isEmpty {
+                Text("No jobs running.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 10)
+            } else {
+                ForEach(manager.visibleJobs) { job in
+                    BackgroundArchiveJobRow(job: job) {
+                        manager.cancelJob(job)
+                    }
                 }
             }
         }
@@ -395,7 +496,9 @@ private struct BackgroundArchiveJobRow: View {
                     Button("Cancel") {
                         onCancel()
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(.red)
                     .font(.caption)
                 }
             }
@@ -429,19 +532,27 @@ private final class BackgroundArchiveJobsPanelController {
 
     private init() {}
 
-    func present(using manager: BackgroundArchiveJobManager) {
+    func present(using manager: BackgroundArchiveJobManager, forceVisible: Bool = false) {
         let jobs = manager.visibleJobs
-        guard !jobs.isEmpty else {
+        guard forceVisible || !jobs.isEmpty else {
             panel?.orderOut(nil)
             return
         }
 
+        let isNewPanel = panel == nil
         let panel = panel ?? makePanel()
-        let height = min(max(CGFloat(jobs.count) * 106 + 48, 148), 420)
+        let rowCount = max(jobs.count, 1)
+        let height = min(max(CGFloat(rowCount) * 106 + 48, 148), 420)
         panel.setContentSize(NSSize(width: 340, height: height))
         panel.contentView = NSHostingView(rootView: BackgroundArchiveJobsPanelView(manager: manager))
-        position(panel)
+        if isNewPanel {
+            position(panel)
+        }
         panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
     }
 
     private func makePanel() -> NSPanel {
@@ -452,11 +563,16 @@ private final class BackgroundArchiveJobsPanelController {
             defer: false
         )
         panel.isFloatingPanel = true
+        panel.isMovable = true
+        panel.isMovableByWindowBackground = true
         panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .moveToActiveSpace]
+        // `canJoinAllSpaces` and `moveToActiveSpace` are mutually exclusive on newer macOS.
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
+        panel.setFrameAutosaveName("SeptaZipJobsPanelFrame")
+        panel.setFrameUsingName("SeptaZipJobsPanelFrame", force: false)
         self.panel = panel
         return panel
     }
@@ -466,7 +582,8 @@ private final class BackgroundArchiveJobsPanelController {
         let visibleFrame = screen.visibleFrame
         let origin = NSPoint(
             x: visibleFrame.maxX - panel.frame.width - 24,
-            y: visibleFrame.maxY - panel.frame.height - 24
+            // Keep clear of Notification Center banners at top-right.
+            y: visibleFrame.minY + 24
         )
         panel.setFrameOrigin(origin)
     }

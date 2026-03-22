@@ -30,6 +30,13 @@ final class SecurityScopedAccessManager {
         return standardizedURL
     }
 
+    @discardableResult
+    func retainRelatedAccess(for url: URL) -> URL {
+        let retainedURL = retainAccess(to: url)
+        retainParentDirectoryAccess(of: retainedURL)
+        return retainedURL
+    }
+
     public func releaseAccess(to url: URL) {
         let standardizedURL = url.standardizedFileURL
         let key = standardizedURL.path
@@ -45,11 +52,12 @@ final class SecurityScopedAccessManager {
         let key = fallbackURL.path
 
         if let activeURL = activeURLs[key] {
+            retainParentDirectoryAccess(of: activeURL)
             return activeURL
         }
 
         guard let bookmarkData else {
-            return fallbackURL
+            return retainRelatedAccess(for: fallbackURL)
         }
 
         var isStale = false
@@ -59,13 +67,20 @@ final class SecurityScopedAccessManager {
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         ).standardizedFileURL else {
-            return fallbackURL
+            return retainRelatedAccess(for: fallbackURL)
         }
 
         if resolvedURL.startAccessingSecurityScopedResource() {
             activeURLs[key] = resolvedURL
         }
 
+        retainParentDirectoryAccess(of: resolvedURL)
         return resolvedURL
+    }
+
+    private func retainParentDirectoryAccess(of url: URL) {
+        let parentURL = url.deletingLastPathComponent().standardizedFileURL
+        guard parentURL.path != url.standardizedFileURL.path else { return }
+        _ = retainAccess(to: parentURL)
     }
 }

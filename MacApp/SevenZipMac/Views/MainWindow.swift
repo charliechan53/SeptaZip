@@ -232,6 +232,13 @@ struct MainWindow: View {
                 }
                 .disabled(currentArchivePath == nil)
                 .help("Test archive integrity")
+
+                Button {
+                    BackgroundArchiveJobManager.shared.showPanel()
+                } label: {
+                    Label("Jobs", systemImage: "list.bullet.rectangle")
+                }
+                .help("Show background job manager")
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
@@ -901,11 +908,25 @@ struct MainWindow: View {
         case .compressFiles(let urls):
             pendingCompressionFiles = uniqueURLs(urls)
             showCompressSheet = true
-        case .quickCompress:
+        case .quickCompress(let urls, let format):
+            let handled = BackgroundArchiveJobManager.shared.handle(
+                .quickCompress(uniqueURLs(urls), format)
+            )
+            if !handled {
+                errorMessage = "Failed to start compression job."
+                showError = true
+            }
             finishQueuedExternalAction()
         case .extractArchives(let urls, let mode):
             handleExternalExtract(urls: uniqueURLs(urls), mode: mode)
-        case .testArchives:
+        case .testArchives(let urls):
+            let handled = BackgroundArchiveJobManager.shared.handle(
+                .testArchives(uniqueURLs(urls))
+            )
+            if !handled {
+                errorMessage = "Failed to start archive test."
+                showError = true
+            }
             finishQueuedExternalAction()
         }
     }
@@ -922,6 +943,13 @@ struct MainWindow: View {
             pendingExtractArchivePath = archiveURLs[0].path
             showExtractSheet = true
         case .sameFolder, .subfolder:
+            let handled = BackgroundArchiveJobManager.shared.handle(
+                .extractArchives(archiveURLs, mode)
+            )
+            if !handled {
+                errorMessage = "Failed to start extraction job."
+                showError = true
+            }
             finishQueuedExternalAction()
         }
     }

@@ -7,15 +7,23 @@ This project has two layers of versioning:
 
 The source of truth must be [`MacApp/project.yml`](/Users/charlie/Downloads/untitled%20folder/7zip-Mac/MacApp/project.yml), not the generated `Info.plist` or `.entitlements` files.
 
+For the current GitHub/direct-download build:
+
+- the Finder extension is sandboxed
+- the main app is intentionally not sandboxed
+
+That split is deliberate. SeptaZip shells out to the bundled `7zz` executable, and a sandboxed parent app cannot reliably grant post-launch user-selected file access to that child process.
+
 ## Update Rules
 
 When releasing a new version:
 
 1. Update `CFBundleShortVersionString` and `CFBundleVersion` in both target `info.properties` blocks in [`MacApp/project.yml`](/Users/charlie/Downloads/untitled%20folder/7zip-Mac/MacApp/project.yml).
 2. Do not hand-edit generated plist or entitlements files and assume they will persist after `make generate`.
-3. Keep sandbox entitlements declared in both target `entitlements.properties` blocks in [`MacApp/project.yml`](/Users/charlie/Downloads/untitled%20folder/7zip-Mac/MacApp/project.yml).
-4. Keep `ENABLE_APP_SANDBOX = YES` and `ENABLE_USER_SELECTED_FILES = readwrite` for both the app and the Finder extension.
-5. Keep the Finder extension embed dependency on `codeSign: false` so the already-signed `.appex` is not re-signed on copy.
+3. Keep sandbox entitlements declared for the Finder extension target in [`MacApp/project.yml`](/Users/charlie/Downloads/untitled%20folder/7zip-Mac/MacApp/project.yml).
+4. Keep `ENABLE_APP_SANDBOX = YES` and `ENABLE_USER_SELECTED_FILES = readwrite` on the Finder extension target.
+5. Keep the main app unsandboxed for the direct-download build unless the archive engine architecture changes.
+6. Keep the Finder extension embed dependency on `codeSign: false` so the already-signed `.appex` is not re-signed on copy.
 
 ## Required Commands
 
@@ -44,7 +52,8 @@ Expected:
 
 - app version matches release version
 - Finder extension version matches release version
-- both entitlements files include:
+- the main app entitlements file is empty for the direct-download build
+- the Finder extension entitlements file includes:
   - `com.apple.security.app-sandbox`
   - `com.apple.security.files.user-selected.read-write`
 
@@ -59,7 +68,8 @@ plutil -p "DerivedData/Build/Products/Release/SeptaZip.app/Contents/PlugIns/Sept
 
 Expected:
 
-- both signed products contain sandbox entitlements
+- the main app signed entitlements do not contain `com.apple.security.app-sandbox`
+- the Finder extension signed entitlements do contain sandbox entitlements
 - both built products show the intended version number
 
 Check Finder integration registration:
@@ -89,5 +99,5 @@ Before publishing any release, manually verify:
 ## Known Failure Modes
 
 - If the extension disappears after a version bump, check whether XcodeGen rewrote entitlements to empty values.
-- If Finder actions open the app but archive operations fail with `errno=1`, the app did not receive a valid security-scoped file grant.
+- If Finder actions open the app but archive operations fail with `errno=1`, check whether the main app was accidentally sandboxed again. The bundled `7zz` child process cannot use post-launch sandbox grants from the parent app.
 - If the version reverts to `1.0`, `make generate` likely rewrote the plists from stale values in [`MacApp/project.yml`](/Users/charlie/Downloads/untitled%20folder/7zip-Mac/MacApp/project.yml).
