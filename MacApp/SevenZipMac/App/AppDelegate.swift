@@ -7,33 +7,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let serviceProvider = ServiceProvider()
     private let actionURLScheme = "septazip"
-    private let actionNotificationName = Notification.Name("com.septazip.finder-action-posted")
-    private let sharedAppGroupIdentifier = "com.septazip.shared"
-    private let finderExtensionBundleIdentifier = "com.septazip.SeptaZip.FinderExtension"
-    private let finderActionQueueDirectoryName = "SeptaZipFinderActions"
     private let archiveExtensions: Set<String> = [
         "7z", "zip", "rar", "tar", "gz", "bz2", "xz", "zst",
         "iso", "dmg", "wim", "cab", "arj", "lzh", "lzma",
         "rpm", "deb", "cpio", "cramfs", "squashfs", "vhd",
         "vhdx", "vmdk", "qcow", "qcow2", "vdi"
     ]
-    private var isConsumingFinderActions = false
-    private var finderActionPollTimer: DispatchSourceTimer?
-    private var processedFinderActionIDs = Set<String>()
-    private var processedFinderActionOrder: [String] = []
-    private let maxProcessedFinderActionIDs = 512
-    private var recentFinderActionSignatures: [String: Date] = [:]
-    private var recentFinderActionSignatureOrder: [String] = []
-    private let maxRecentFinderActionSignatures = 256
-    private let duplicateFinderActionWindow: TimeInterval = 2.0
-
-    private struct QueuedFinderActionPayload: Decodable {
-        let id: String
-        let createdAt: Date
-        let action: String
-        let files: [String]
-        let format: String?
-    }
 
     private struct FinderActionFile: Decodable {
         let path: String
@@ -67,12 +46,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         super.init()
         registerAppleEventHandlers()
-        registerFinderActionObserver()
-    }
-
-    deinit {
-        DistributedNotificationCenter.default().removeObserver(self)
-        finderActionPollTimer?.cancel()
     }
 
     private func registerAppleEventHandlers() {
@@ -90,30 +63,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    private func registerFinderActionObserver() {
-        DistributedNotificationCenter.default().addObserver(
-            self,
-            selector: #selector(handleFinderActionNotification(_:)),
-            name: actionNotificationName,
-            object: nil,
-            suspensionBehavior: .deliverImmediately
-        )
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = serviceProvider
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-        startFinderActionPolling()
-        consumeQueuedFinderActions()
-    }
-
-    func applicationDidBecomeActive(_ notification: Notification) {
-        consumeQueuedFinderActions()
-    }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        finderActionPollTimer?.cancel()
-        finderActionPollTimer = nil
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -165,10 +117,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         application(NSApp, open: [url])
     }
 
-    @objc private func handleFinderActionNotification(_ notification: Notification) {
-        consumeQueuedFinderActions()
-    }
-
     private func openArchive(at path: String) {
         NotificationCenter.default.post(
             name: .openArchive,
@@ -204,21 +152,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             window.orderFrontRegardless()
             window.makeKey()
         }
-    }
-
-    private func startFinderActionPolling() {
-        guard finderActionPollTimer == nil else { return }
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(
-            deadline: .now() + .milliseconds(500),
-            repeating: .seconds(1),
-            leeway: .milliseconds(200)
-        )
-        timer.setEventHandler { [weak self] in
-            self?.consumeQueuedFinderActions()
-        }
-        timer.resume()
-        finderActionPollTimer = timer
     }
 
     private func scheduleBackgroundWindowSuppression() {
@@ -277,161 +210,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         return nil
-    }
-
-    private func action(fromQueuedFinderPayload payload: QueuedFinderActionPayload) -> AppOpenAction? {
-        let urls = payload.files
-            .filter(isSafePath(_:))
-            .map { URL(fileURLWithPath: $0).standardizedFileURL }
-        guard !urls.isEmpty else { return nil }
-
-        switch payload.action {
-        case "compress":
-            return .compressFiles(urls)
-        case "compressDirect":
-            guard let archiveFormat = archiveFormat(from: payload.format) else { return nil }
-            return .quickCompress(urls, archiveFormat)
-        case "extract":
-            return .extractArchives(urls.filter { !$0.hasDirectoryPath }, .prompt)
-        case "extractHere":
-            return .extractArchives(urls.filter { !$0.hasDirectoryPath }, .sameFolder)
-        case "extractToSubfolder":
-            return .extractArchives(urls.filter { !$0.hasDirectoryPath }, .subfolder)
-        case "test":
-            return .testArchives(urls.filter { !$0.hasDirectoryPath })
-        case "open":
-            if let firstFileURL = urls.first(where: { !$0.hasDirectoryPath }) {
-                return .openArchive(firstFileURL)
-            }
-        default:
-            break
-        }
-
-        return nil
-    }
-
-    private func consumeQueuedFinderActions() {
-        guard !isConsumingFinderActions else { return }
-        isConsumingFinderActions = true
-        defer { isConsumingFinderActions = false }
-
-        let fileManager = FileManager.default
-        for queueDirectoryURL in finderActionQueueDirectoryURLs() {
-            guard let fileURLs = try? fileManager.contentsOfDirectory(
-                at: queueDirectoryURL,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            ) else {
-                continue
-            }
-
-            let actionFiles = fileURLs
-                .filter { $0.pathExtension == "json" }
-                .sorted { $0.lastPathComponent < $1.lastPathComponent }
-
-            for fileURL in actionFiles {
-                defer { try? fileManager.removeItem(at: fileURL) }
-
-                guard let payloadData = try? Data(contentsOf: fileURL),
-                      let payload = try? JSONDecoder().decode(QueuedFinderActionPayload.self, from: payloadData) else {
-                    continue
-                }
-
-                if hasProcessedFinderAction(id: payload.id) {
-                    continue
-                }
-
-                if shouldSuppressDuplicateFinderAction(payload) {
-                    markFinderActionProcessed(id: payload.id)
-                    continue
-                }
-
-                guard let action = action(fromQueuedFinderPayload: payload) else {
-                    markFinderActionProcessed(id: payload.id)
-                    continue
-                }
-
-                markFinderActionProcessed(id: payload.id)
-                if action.isBackgroundJob {
-                    scheduleBackgroundWindowSuppression()
-                }
-                route(action)
-            }
-        }
-    }
-
-    private func hasProcessedFinderAction(id: String) -> Bool {
-        processedFinderActionIDs.contains(id)
-    }
-
-    private func markFinderActionProcessed(id: String) {
-        guard processedFinderActionIDs.insert(id).inserted else { return }
-        processedFinderActionOrder.append(id)
-        if processedFinderActionOrder.count > maxProcessedFinderActionIDs {
-            let overflow = processedFinderActionOrder.count - maxProcessedFinderActionIDs
-            let removed = processedFinderActionOrder.prefix(overflow)
-            processedFinderActionOrder.removeFirst(overflow)
-            for staleID in removed {
-                processedFinderActionIDs.remove(staleID)
-            }
-        }
-    }
-
-    private func finderActionSignature(for payload: QueuedFinderActionPayload) -> String {
-        let normalizedPaths = payload.files
-            .filter(isSafePath(_:))
-            .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
-            .sorted()
-        return ([payload.action, payload.format ?? ""] + normalizedPaths)
-            .joined(separator: "|")
-    }
-
-    private func shouldSuppressDuplicateFinderAction(_ payload: QueuedFinderActionPayload) -> Bool {
-        let signature = finderActionSignature(for: payload)
-        let eventTime = payload.createdAt
-
-        if let lastSeenAt = recentFinderActionSignatures[signature],
-           abs(eventTime.timeIntervalSince(lastSeenAt)) < duplicateFinderActionWindow {
-            return true
-        }
-
-        let wasNew = recentFinderActionSignatures.updateValue(eventTime, forKey: signature) == nil
-        if wasNew {
-            recentFinderActionSignatureOrder.append(signature)
-            if recentFinderActionSignatureOrder.count > maxRecentFinderActionSignatures {
-                let overflow = recentFinderActionSignatureOrder.count - maxRecentFinderActionSignatures
-                let removed = recentFinderActionSignatureOrder.prefix(overflow)
-                recentFinderActionSignatureOrder.removeFirst(overflow)
-                for staleSignature in removed {
-                    recentFinderActionSignatures.removeValue(forKey: staleSignature)
-                }
-            }
-        }
-
-        return false
-    }
-
-    private func finderActionQueueDirectoryURLs() -> [URL] {
-        var urls: [URL] = []
-
-        if let groupContainerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: sharedAppGroupIdentifier
-        ) {
-            urls.append(
-                groupContainerURL.appendingPathComponent(
-                    finderActionQueueDirectoryName,
-                    isDirectory: true
-                )
-            )
-        } else {
-            // Legacy fallback for previously shipped builds that used the extension container.
-            let containerPath = "Library/Containers/\(finderExtensionBundleIdentifier)/Data/Library/Application Support/\(finderActionQueueDirectoryName)"
-            let legacyURL = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(containerPath, isDirectory: true)
-            urls.append(legacyURL)
-        }
-
-        return urls
     }
 
     private func isSafePath(_ path: String) -> Bool {

@@ -4,9 +4,7 @@ import UserNotifications
 
 class FinderSync: FIFinderSync {
     private var lastSelectedItems: [URL] = []
-    private let actionNotificationName = Notification.Name("com.septazip.finder-action-posted")
-    private let actionQueueDirectoryName = "SeptaZipFinderActions"
-    private let sharedAppGroupIdentifier = "com.septazip.shared"
+    private let actionURLScheme = "septazip"
     private let duplicateActionWindow: TimeInterval = 2.0
     private let lastDispatchedSignatureDefaultsKey = "finder.lastDispatchedSignature"
     private let lastDispatchedTimestampDefaultsKey = "finder.lastDispatchedTimestamp"
@@ -14,8 +12,6 @@ class FinderSync: FIFinderSync {
     private var lastDispatchedActionTime = Date.distantPast
 
     private struct FinderActionPayload: Codable {
-        let id: String
-        let createdAt: Date
         let action: String
         let files: [String]
         let format: String?
@@ -318,27 +314,16 @@ class FinderSync: FIFinderSync {
 
         let appBundleId = "com.septazip.SeptaZip"
         let workspace = NSWorkspace.shared
-        let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: appBundleId)
         let payload = FinderActionPayload(
-            id: UUID().uuidString,
-            createdAt: Date(),
             action: action,
-            files: urls.map(\.path),
+            files: normalizedPaths,
             format: format
         )
-        guard enqueueFinderAction(payload) else {
+        guard let actionURL = makeActionURL(for: payload) else {
             showNotification(
                 title: "7-Zip Error",
-                message: "Failed to queue Finder action."
+                message: "Failed to encode Finder action."
             )
-            return
-        }
-
-        if !runningApps.isEmpty {
-            if shouldActivateApp(for: action) {
-                runningApps.first?.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-            }
-            notifyMainApp(repeats: 2)
             return
         }
 
@@ -346,16 +331,28 @@ class FinderSync: FIFinderSync {
         config.activates = shouldActivateApp(for: action)
         let appURL = workspace.urlForApplication(withBundleIdentifier: appBundleId) ?? hostApplicationURL()
 
-        workspace.openApplication(at: appURL, configuration: config) { _, error in
+        workspace.open([actionURL], withApplicationAt: appURL, configuration: config) { _, error in
             if let error {
                 self.showNotification(
                     title: "7-Zip Error",
                     message: "Failed to open app: \(error.localizedDescription)"
                 )
-            } else {
-                self.notifyMainApp(repeats: 8)
             }
         }
+    }
+
+    private func makeActionURL(for payload: FinderActionPayload) -> URL? {
+        guard let payloadData = try? JSONEncoder().encode(payload) else {
+            return nil
+        }
+
+        var components = URLComponents()
+        components.scheme = actionURLScheme
+        components.host = "finder"
+        components.queryItems = [
+            URLQueryItem(name: "payload", value: payloadData.base64EncodedString())
+        ]
+        return components.url
     }
 
     private func showNotification(title: String, message: String) {
@@ -377,59 +374,6 @@ class FinderSync: FIFinderSync {
         default:
             return false
         }
-    }
-
-    private func notifyMainApp(repeats: Int) {
-        let notificationCenter = DistributedNotificationCenter.default()
-
-        for attempt in 0..<max(repeats, 1) {
-            let delay = 0.2 * Double(attempt)
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                notificationCenter.postNotificationName(
-                    self.actionNotificationName,
-                    object: nil,
-                    userInfo: nil,
-                    deliverImmediately: true
-                )
-            }
-        }
-    }
-
-    private func enqueueFinderAction(_ payload: FinderActionPayload) -> Bool {
-        guard let queueDirectoryURL = actionQueueDirectoryURL() else { return false }
-        do {
-            try FileManager.default.createDirectory(
-                at: queueDirectoryURL,
-                withIntermediateDirectories: true
-            )
-            let fileName = "finder-action-\(Int(payload.createdAt.timeIntervalSince1970 * 1000))-\(payload.id).json"
-            let fileURL = queueDirectoryURL.appendingPathComponent(fileName)
-            let payloadData = try JSONEncoder().encode(payload)
-            try payloadData.write(to: fileURL, options: .atomic)
-            return true
-        } catch {
-            return false
-        }
-    }
-
-    private func actionQueueDirectoryURL() -> URL? {
-        if let groupContainerURL = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: sharedAppGroupIdentifier
-        ) {
-            return groupContainerURL.appendingPathComponent(
-                actionQueueDirectoryName,
-                isDirectory: true
-            )
-        }
-
-        guard let appSupportURL = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first else {
-            return nil
-        }
-
-        return appSupportURL.appendingPathComponent(actionQueueDirectoryName, isDirectory: true)
     }
 
     private func shouldSuppressDuplicateDispatch(signature: String, now: Date) -> Bool {
